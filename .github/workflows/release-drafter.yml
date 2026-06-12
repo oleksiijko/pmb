@@ -26,7 +26,7 @@ jobs:
       contents: write          # needed to write draft release
       pull-requests: write     # needed for autolabeler
     steps:
-      - uses: release-drafter/release-drafter@v6
+      - uses: release-drafter/release-drafter@v7
         with:
           config-name: release-drafter.yml
         env:
