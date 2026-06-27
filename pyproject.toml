@@ -1,6 +1,6 @@
 [project]
 name = "pmb-ai"
-version = "1.1.0"
+version = "1.2.0"
 description = "PMB (Personal Memory Brain) - local-first persistent memory for AI coding agents (MCP server, fully offline, no API keys)"
 readme = "README.md"
 license = {text = "Apache-2.0"}

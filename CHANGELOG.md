@@ -4,7 +4,14 @@ All notable changes to PMB are documented here.
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-06-27 - Dashboard redesign and self-tending memory
+
+A full dashboard redesign, settings moved out of the TUI into the dashboard, and engine work that lets memory tend itself.
+
 ### Added
+- **Dashboard redesign**: violet PMB design system (Inter, glass surfaces), a live Settings tab that edits config in the browser, global search, a collapsible icon sidebar, a boot loader, a custom confirm dialog, Map polish, an Overview activity chart, an Errors tab, and running maintenance commands from the UI.
+- **Memory tends itself**: the daemon maintenance tick now runs the forgetting-curve decay before archive_cold (gated by `daemon.maintenance_decay`), so importance decays on its own instead of needing a manual `pmb decay`.
+- **Recall quality**: saturated the graph boost `w/(1+w)` and tuned the `graph_boost` default.
 - **New docs page: "Does PMB actually help — and how we measure it honestly"**
   (`concepts/measuring-impact.md`). Lays out the two-method evaluation stance -
   retrieval benchmarks (LoCoMo / multilingual) for recall quality, and Earned

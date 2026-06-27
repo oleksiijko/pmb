@@ -1,6 +1,6 @@
 {
   "name": "pmb-ai",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Local-first persistent memory for AI coding agents. Thin npm launcher for the Python package on PyPI.",
   "bin": {
     "pmb-ai": "./bin/pmb-ai.js"
