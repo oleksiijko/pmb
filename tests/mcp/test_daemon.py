@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -167,3 +168,333 @@ def test_hook_client_none_when_no_daemon(tmp_pmb_home):
     from pmb.cli.commands.ambient import _try_daemon_prepare
     # no daemon registered → immediate None (cold path)
     assert _try_daemon_prepare("anything", 4000, timeout=0.3) is None
+
+
+# ── S9: the daemon drains buffered perf rows when it stops serving ──────────
+
+def test_lifespan_shutdown_drains_perf(monkeypatch):
+    """The ASGI lifespan shutdown is the daemon's only usable drain hook.
+
+    uvicorn captures SIGTERM/SIGINT, shuts down, restores the previous
+    handlers and re-raises the signal from inside `Server.capture_signals`, so
+    the process dies without `uvicorn.run` ever returning — a `finally` around
+    it and `atexit` are both dead code on the path that actually stops a
+    daemon. Lifespan shutdown does run, before that re-raise.
+    """
+    import asyncio
+    from unittest.mock import MagicMock
+
+    from pmb.mcp.daemon import _drain_on_lifespan_shutdown
+
+    engine = MagicMock()
+    flushed: list[bool] = []
+    monkeypatch.setattr("pmb.mcp.perf.flush_perf",
+                        lambda *a, **kw: flushed.append(True))
+
+    async def inner_app(scope, receive, send):
+        assert (await receive())["type"] == "lifespan.startup"
+        await send({"type": "lifespan.startup.complete"})
+        assert (await receive())["type"] == "lifespan.shutdown"
+        await send({"type": "lifespan.shutdown.complete"})
+
+    wrapped = _drain_on_lifespan_shutdown(inner_app, engine)
+    events = ["lifespan.startup", "lifespan.shutdown"]
+    sent: list[dict] = []
+
+    async def receive():
+        return {"type": events.pop(0)}
+
+    async def send(message):
+        # the drain must have happened by the time shutdown is reported done
+        if message["type"] == "lifespan.shutdown.complete":
+            assert flushed, "shutdown reported complete before the perf flush"
+        sent.append(message)
+
+    asyncio.run(wrapped({"type": "lifespan"}, receive, send))
+
+    assert [m["type"] for m in sent] == ["lifespan.startup.complete",
+                                         "lifespan.shutdown.complete"]
+    # exactly once: the wrapper also drains from a `finally`, which must see
+    # the message path has already run
+    assert engine.wait_for_writes.call_count == 1
+    assert len(flushed) == 1
+
+
+def test_lifespan_shutdown_drains_when_the_app_raises(monkeypatch):
+    """A drain hung only off the shutdown message is not enough.
+
+    If the wrapped app raises during its shutdown, no
+    `lifespan.shutdown.complete` (or `.failed`) is ever sent — uvicorn catches
+    the exception in `LifespanOn.main` and carries on to re-raise the signal.
+    Without a `finally` the daemon would silently record nothing, which is the
+    defect this wrapper exists to fix.
+    """
+    import asyncio
+    from unittest.mock import MagicMock
+
+    from pmb.mcp.daemon import _drain_on_lifespan_shutdown
+
+    engine = MagicMock()
+    flushed: list[bool] = []
+    monkeypatch.setattr("pmb.mcp.perf.flush_perf",
+                        lambda *a, **kw: flushed.append(True))
+
+    async def inner_app(scope, receive, send):
+        assert (await receive())["type"] == "lifespan.startup"
+        await send({"type": "lifespan.startup.complete"})
+        assert (await receive())["type"] == "lifespan.shutdown"
+        raise RuntimeError("shutdown blew up")
+
+    wrapped = _drain_on_lifespan_shutdown(inner_app, engine)
+    events = ["lifespan.startup", "lifespan.shutdown"]
+
+    async def receive():
+        return {"type": events.pop(0)}
+
+    async def send(message):
+        pass
+
+    with pytest.raises(RuntimeError, match="shutdown blew up"):
+        asyncio.run(wrapped({"type": "lifespan"}, receive, send))
+
+    assert len(flushed) == 1
+    assert engine.wait_for_writes.call_count == 1
+
+
+def test_lifespan_wrapper_passes_other_scopes_through():
+    """Only the lifespan scope is intercepted; requests are untouched."""
+    import asyncio
+    from unittest.mock import MagicMock
+
+    from pmb.mcp.daemon import _drain_on_lifespan_shutdown
+
+    seen: list[str] = []
+
+    async def inner_app(scope, receive, send):
+        seen.append(scope["type"])
+
+    wrapped = _drain_on_lifespan_shutdown(inner_app, MagicMock())
+    asyncio.run(wrapped({"type": "http"}, None, None))
+    assert seen == ["http"]
+
+
+class _StubApp:
+    """Minimal ASGI app: records what it is asked to do, drains nothing."""
+
+    def __init__(self):
+        self.middleware: list = []
+        self.scopes: list[str] = []
+
+    def add_middleware(self, mw):
+        self.middleware.append(mw)
+
+    async def __call__(self, scope, receive, send):
+        self.scopes.append(scope["type"])
+
+
+class _StubServer:
+    def __init__(self, app, engine):
+        self._app = app
+        self._pmb_engine = engine
+        self.name = "stub-ws"
+
+    def http_app(self, path=None):
+        return self._app
+
+    def custom_route(self, *_a, **_kw):
+        return lambda fn: fn
+
+
+def _serve_and_capture(monkeypatch, tmp_pmb_home):
+    """Run `run_daemon` with everything heavy stubbed; return what it served."""
+    from unittest.mock import MagicMock
+
+    from pmb.mcp.daemon import run_daemon
+
+    engine = MagicMock()
+    engine.config.get.side_effect = lambda key, *a: {
+        "daemon.idle_exit_min": 0,     # no idle watcher thread in a test
+        "daemon.maintenance": False,
+    }.get(key, 0)
+    engine.recover_outbox.return_value = 0
+    app = _StubApp()
+
+    monkeypatch.setattr("pmb.mcp.server.build_server",
+                        lambda *a, **kw: _StubServer(app, engine))
+    monkeypatch.setattr("pmb.mcp.registry.find_live_daemon", lambda: None)
+    monkeypatch.setattr("pmb.mcp.registry.register_server",
+                        lambda **kw: {"pid": 4242})
+    monkeypatch.setattr("pmb.mcp.registry.unregister_server", lambda pid: None)
+
+    served: dict = {}
+    monkeypatch.setattr("uvicorn.run",
+                        lambda app, **kw: served.update(app=app, kwargs=kw))
+
+    run_daemon(port=0)
+    return served, app, engine
+
+
+def _drive_lifespan(app):
+    """Put an ASGI app through one startup/shutdown lifespan cycle."""
+    import asyncio
+
+    events = ["lifespan.startup", "lifespan.shutdown"]
+
+    async def receive():
+        return {"type": events.pop(0)}
+
+    async def send(_message):
+        pass
+
+    asyncio.run(app({"type": "lifespan"}, receive, send))
+
+
+def test_run_daemon_serves_an_app_that_drains_on_shutdown(monkeypatch,
+                                                          tmp_pmb_home):
+    """The wrapper only helps if `run_daemon` actually hands it to uvicorn.
+
+    Testing `_drain_on_lifespan_shutdown` in isolation proves the wrapper
+    drains, not that the daemon serves a wrapped app - passing the raw app to
+    `uvicorn.run` would leave every other test in this section green while the
+    daemon silently recorded nothing again.
+    """
+    flushed: list[bool] = []
+    monkeypatch.setattr("pmb.mcp.perf.flush_perf",
+                        lambda *a, **kw: flushed.append(True))
+
+    served, raw_app, _engine = _serve_and_capture(monkeypatch, tmp_pmb_home)
+
+    assert served, "run_daemon never reached uvicorn.run"
+    # `run_daemon`'s own `finally` fallback has already drained once by now -
+    # only a drain caused by the lifespan cycle itself proves the wrapping.
+    baseline = len(flushed)
+    _drive_lifespan(served["app"])
+    assert len(flushed) > baseline, (
+        "the app handed to uvicorn does not drain on lifespan shutdown")
+    assert raw_app.scopes == ["lifespan"], "the real app was never called"
+
+
+def test_run_daemon_requires_lifespan_support(monkeypatch, tmp_pmb_home):
+    """uvicorn's default `lifespan="auto"` can silently disable the drain.
+
+    In auto mode, an app that rejects the lifespan protocol during startup
+    makes uvicorn log a warning and serve on without a shutdown phase - the
+    wrapper is then never asked to drain, and the re-raised SIGTERM still
+    kills the process from inside `uvicorn.run`, so `run_daemon`'s `finally`
+    does not run either. Nothing would record telemetry and nothing would say
+    so. This daemon depends on lifespan, so it asks for it explicitly and
+    fails loudly instead.
+    """
+    monkeypatch.setattr("pmb.mcp.perf.flush_perf", lambda *a, **kw: None)
+
+    served, _raw_app, _engine = _serve_and_capture(monkeypatch, tmp_pmb_home)
+
+    assert served["kwargs"].get("lifespan") == "on"
+
+
+def _free_port() -> int:
+    import socket
+
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+# Root cause: spawns a real uvicorn daemon, binds a port and waits on model
+# prewarm - the waits are wall-clock, so a loaded runner can time it out.
+@pytest.mark.quarantined
+@pytest.mark.skipif(os.name == "nt", reason="POSIX signal semantics")
+def test_sigterm_on_a_real_daemon_persists_buffered_rows(tmp_path):
+    """The end of the story the other tests only tell in pieces.
+
+    Everything above stubs `flush_perf`, so nothing proves a buffered row
+    reaches SQLite on the path that actually stops a daemon. This drives a
+    real daemon over streamable-http with fewer than `_PERF_FLUSH_EVERY`
+    calls - the case where only a shutdown drain can save them - and counts
+    rows in the workspace database after SIGTERM.
+    """
+    import asyncio
+    import os as _os  # noqa: F401 - shadow-free alias for the subprocess env
+    import signal
+    import sqlite3
+    import subprocess
+    import sys
+    import time
+    import urllib.request
+
+    pytest.importorskip("uvicorn")
+    Client = pytest.importorskip("fastmcp").Client
+
+    calls = 6  # < _PERF_FLUSH_EVERY (25)
+    home = tmp_path / "pmb_home"
+    home.mkdir()
+    port = _free_port()
+    env = dict(_os.environ, PMB_HOME=str(home), PMB_WORKSPACE="e2ews")
+
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "pmb.cli", "daemon", "run",
+         "--port", str(port), "--idle-exit-min", "0"],
+        env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+    try:
+        token = None
+        deadline = time.time() + 180  # cold start includes the model prewarm
+        while time.time() < deadline:
+            if proc.poll() is not None:
+                pytest.fail(f"daemon exited early: {proc.stderr.read()[-2000:]}")
+            token_file = home / "daemon.token"
+            if token_file.exists():
+                token = token_file.read_text().strip()
+                try:
+                    req = urllib.request.Request(
+                        f"http://127.0.0.1:{port}/internal/health",
+                        headers={"Authorization": f"Bearer {token}"})
+                    urllib.request.urlopen(req, timeout=2).read()
+                    break
+                except Exception:
+                    pass
+            time.sleep(1)
+        else:
+            pytest.fail("daemon never became healthy")
+
+        async def _hit():
+            async with Client(f"http://127.0.0.1:{port}/mcp",
+                              auth=token) as client:
+                for _ in range(calls):
+                    await client.call_tool("recall", {"query": "e2e ping"})
+
+        asyncio.run(_hit())
+
+        proc.send_signal(signal.SIGTERM)
+        proc.wait(timeout=30)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait(timeout=10)
+
+    db = home / "workspaces" / "e2ews" / "events.sqlite"
+    assert db.exists(), "daemon never created the workspace database"
+    with sqlite3.connect(str(db)) as conn:
+        tables = {r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'")}
+        assert "mcp_calls" in tables, (
+            "no perf table at all - every buffered row died with the daemon")
+        assert conn.execute("SELECT count(*) FROM mcp_calls").fetchone()[0] \
+            == calls
+
+
+def test_drain_before_exit_never_raises(monkeypatch):
+    """Shutdown must not be blocked by a broken engine or a perf failure."""
+    from unittest.mock import MagicMock
+
+    from pmb.mcp.daemon import _drain_before_exit
+
+    def _boom(*a, **kw):
+        raise RuntimeError("perf is gone")
+
+    # never the real flush: it would write whatever `_PERF_BUF` holds to a
+    # live database outside tmp_path
+    monkeypatch.setattr("pmb.mcp.perf.flush_perf", _boom)
+    engine = MagicMock()
+    engine.wait_for_writes.side_effect = RuntimeError("engine is gone")
+    _drain_before_exit(engine)  # must not propagate
