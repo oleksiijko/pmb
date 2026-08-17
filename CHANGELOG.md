@@ -2,6 +2,11 @@
 
 All notable changes to PMB are documented here.
 
+## [1.2.3] - 2026-08-16 - Version-consistency fix
+
+### Fixed
+- **`pmb.__version__` now matches the release.** The 1.2.3 release bumped `pyproject.toml` but left the `__version__` constant (and the npm package version) at 1.2.2, so `pmb daemon status` / `pmb doctor` reported `v1.2.2` even after upgrading — which read as "the restart didn't work" and sent users chasing a non-existent stale-process bug. `__version__`, the npm package, and the CHANGELOG all agree on 1.2.3 now.
+
 ## [Unreleased]
 
 ### Fixed
