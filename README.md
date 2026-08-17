@@ -414,7 +414,7 @@ everything except `recall` (35-110 ms warm), which is below human perception.
 SQLite WAL + a 10 s busy-timeout handle concurrent writes.
 
 **Wipe a fact?** `pmb forget <ulid>` archives it (excluded from recall, restorable).
-Hard-delete: `pmb forget <ulid> --hard`.
+Hard-delete: `pmb delete <ulid> --hard`.
 
 **Windows?** Yes - tested on Windows 11, macOS 14, Ubuntu 22.04. Cyrillic paths
 and console encoding are handled.
