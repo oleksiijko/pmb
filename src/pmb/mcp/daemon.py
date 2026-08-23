@@ -393,18 +393,7 @@ def _register_internal_routes(mcp, engine) -> None:
         """S3: authenticated shutdown so a client that detects a VERSION
         mismatch can retire the stale daemon and autostart the new build,
         instead of every hook falling cold for up to idle_exit_min."""
-        def _drain():
-            try:
-                engine.wait_for_writes(timeout=5.0)
-            except Exception:
-                pass
-            try:
-                from pmb.mcp.perf import flush_perf  # S9: don't drop buffered perf
-                flush_perf()
-            except Exception:
-                pass
-
-        await anyio.to_thread.run_sync(_drain)
+        await anyio.to_thread.run_sync(_drain_before_exit, engine)
 
         def _bye():
             time.sleep(0.2)
@@ -412,6 +401,76 @@ def _register_internal_routes(mcp, engine) -> None:
 
         threading.Thread(target=_bye, daemon=True).start()
         return JSONResponse({"ok": True, "version": pmb.__version__})
+
+
+def _drain_before_exit(engine) -> None:
+    """Land everything this process is still holding in memory.
+
+    Queued writes go through the engine outbox, and `record_call` keeps perf
+    rows buffered until `_PERF_FLUSH_EVERY` of them accumulate - a daemon that
+    served fewer calls than that writes no telemetry at all unless it drains
+    on the way out. Never raises: shutdown must not be blocked by either.
+    """
+    try:
+        engine.wait_for_writes(timeout=5.0)
+    except Exception:
+        pass
+    try:
+        from pmb.mcp.perf import flush_perf  # S9: don't drop buffered perf
+        flush_perf()
+    except Exception:
+        pass
+
+
+def _drain_on_lifespan_shutdown(app, engine):
+    """Wrap an ASGI app so `_drain_before_exit` runs on lifespan shutdown.
+
+    The daemon cannot drain after `uvicorn.run()` returns, because on a signal
+    it never returns: uvicorn captures SIGTERM/SIGINT itself, shuts down
+    gracefully, restores the previous handlers and then re-raises the signal
+    at the end of `Server.capture_signals()`. The process dies of that signal
+    from inside `uvicorn.run`, so a `finally` around it - and `atexit`, which
+    Python does not run on SIGTERM either - are both dead code on the path
+    that actually stops a daemon.
+
+    The ASGI lifespan shutdown does run first, on the event loop, before that
+    re-raise. Wrapping at the protocol level rather than adding a Starlette
+    `on_shutdown` handler keeps this working whether or not the app fastmcp
+    hands us was built with its own lifespan context.
+
+    Normally the drain runs from the shutdown message, so it lands before the
+    server is told shutdown is complete. An app that raises on the way down
+    never sends that message - uvicorn catches it in `LifespanOn.main` and
+    goes on to re-raise the signal - so the `finally` covers that path too,
+    once.
+    """
+    import anyio
+
+    async def _wrapped(scope, receive, send):
+        if scope.get("type") != "lifespan":
+            await app(scope, receive, send)
+            return
+
+        drained = False
+
+        async def _drain_once():
+            nonlocal drained
+            if not drained:
+                drained = True
+                await anyio.to_thread.run_sync(_drain_before_exit, engine)
+
+        async def _send(message):
+            if message.get("type") in ("lifespan.shutdown.complete",
+                                       "lifespan.shutdown.failed"):
+                await _drain_once()
+            await send(message)
+
+        try:
+            await app(scope, receive, _send)
+        finally:
+            await _drain_once()
+
+    return _wrapped
 
 
 def _idle_watcher(idle_exit_min: float, engine) -> None:
@@ -423,15 +482,7 @@ def _idle_watcher(idle_exit_min: float, engine) -> None:
     while True:
         time.sleep(min(limit_s / 2.0, 60.0))
         if (time.time() - _LAST_REQUEST["ts"]) >= limit_s:
-            try:
-                engine.wait_for_writes(timeout=5.0)  # don't drop queued writes
-            except Exception:
-                pass
-            try:
-                from pmb.mcp.perf import flush_perf  # S9: flush buffered perf
-                flush_perf()
-            except Exception:
-                pass
+            _drain_before_exit(engine)
             sys.stderr.write("[pmb-daemon] idle timeout reached - exiting.\n")
             os._exit(0)
 
@@ -604,8 +655,22 @@ def run_daemon(
         f"{'never' if not idle_exit_min else f'{idle_exit_min:g}min'}\n"
     )
     try:
-        uvicorn.run(app, host=host, port=port, log_level="warning")
+        # lifespan="on", not the default "auto": in auto mode an app that
+        # rejects the protocol is served without a shutdown phase, which would
+        # silently take the drain below with it - and the SIGTERM re-raise
+        # means the `finally` here would not cover for it. This daemon depends
+        # on lifespan, so a missing one must fail loudly at startup.
+        uvicorn.run(_drain_on_lifespan_shutdown(app, engine),
+                    host=host, port=port, log_level="warning",
+                    lifespan="on")
     finally:
+        # Fallback only. SIGTERM never reaches this: uvicorn re-raises it and
+        # the default disposition kills the process from inside uvicorn.run().
+        # SIGINT does - the restored handler turns the re-raise into a
+        # KeyboardInterrupt that leaves uvicorn.run() - as does a graceful
+        # return. The lifespan wrapper has normally drained already; a second
+        # drain is a no-op once the outbox is empty.
+        _drain_before_exit(engine)
         if entry is not None:
             try:
                 unregister_server(entry["pid"])
