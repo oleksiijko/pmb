@@ -102,6 +102,12 @@ def test_thin_client_pretool_relays(tmp_path, monkeypatch, capsys):
         monkeypatch.setattr(sys, "stdin", _In(payload))
         rc = hc.main(["pretool", "--quiet"])
         assert rc == 0
-        assert "use pnpm" in capsys.readouterr().out
+        out = capsys.readouterr().out
+        # PreToolUse stdout must be valid JSON with the lesson in
+        # additionalContext - a bare-text hook made Cursor block the tool call.
+        payload = json.loads(out)
+        assert "use pnpm" in payload["additionalContext"]
+        assert "decision" not in payload, \
+            "advisory guard must never drive the host's permission flow"
     finally:
         srv.shutdown()
