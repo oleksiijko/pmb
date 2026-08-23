@@ -15,7 +15,7 @@ in tests predictable.
 
 from __future__ import annotations
 
-__version__ = "1.2.2"
+__version__ = "1.2.3"
 
 # ---------------------------------------------------------------------------
 # Quiet third-party noise BEFORE any heavy module gets a chance to import.
