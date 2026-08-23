@@ -301,8 +301,13 @@ def cmd_track_action(args: list[str]) -> int:
 def cmd_pretool(args: list[str]) -> int:
     """R11: PreToolUse lesson guard. Reads the PostToolUse-shaped payload, asks
     the warm daemon whether a lesson should fire for this tool call, and prints
-    it as additionalContext. Daemon-served ONLY - no cold fallback (the guard is
-    an accelerator, not a contract); silent no-op if no daemon."""
+    it as JSON `{"additionalContext": ...}` - the one shape every PreToolUse
+    host (Cursor and Claude Code) accepts for "add context, change nothing".
+    Emitting bare text broke Cursor (it requires valid JSON on stdout and
+    BLOCKS the tool call for safety otherwise); bare text is also the classic
+    "hook eats a tool call" footgun. Daemon-served ONLY - no cold fallback (the
+    guard is an accelerator, not a contract); silent no-op if no daemon or if
+    the guard has nothing to say."""
     raw = _read_stdin_utf8()
     if not raw.strip():
         return 0
@@ -333,9 +338,12 @@ def cmd_pretool(args: list[str]) -> int:
         timeout=1.5,
     )
     if out is not None:
-        ctx = out.get("context") or ""
-        if ctx.strip():
-            sys.stdout.write(ctx if ctx.endswith("\n") else ctx + "\n")
+        ctx = (out.get("context") or "").strip()
+        if ctx:
+            # Advisory only: no `decision` field, so no host changes its
+            # permission flow - the lesson just rides along as context.
+            sys.stdout.write(json.dumps(
+                {"additionalContext": ctx}, ensure_ascii=False))
     return 0
 
 
