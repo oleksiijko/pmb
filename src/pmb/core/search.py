@@ -529,12 +529,15 @@ class HybridSearch:
         return rescored
 
     def embed(self, text: str) -> np.ndarray:
-        return self.model.encode([text], show_progress_bar=False)[0].astype(np.float32)
+        return self.embed_batch([text])[0]
 
     def embed_batch(self, texts: list[str]) -> np.ndarray:
         if not texts:
             return np.zeros((0, EMBED_DIM), dtype=np.float32)
-        return self.model.encode(texts, show_progress_bar=False, batch_size=32).astype(np.float32)
+        # Every workspace shares the cached model. Concurrent inference from
+        # recall and the embed worker can crash the native MPS runtime.
+        with _ModelCache._lock:
+            return self.model.encode(texts, show_progress_bar=False, batch_size=32).astype(np.float32)
 
     def _guard_dim(self, vec_dim: int) -> None:
         """Refuse to write a vector whose dimension doesn't match the table.

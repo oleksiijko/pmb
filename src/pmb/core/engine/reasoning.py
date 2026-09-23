@@ -40,7 +40,7 @@ class ReasoningMixin:
     def consolidate(
         self,
         dry_run: bool = False,
-        backend: str = "auto",
+        backend: str | None = None,
         model: str | None = None,
         since_days: float = 14.0,
         similarity_threshold: float = 0.5,
@@ -62,7 +62,7 @@ class ReasoningMixin:
         result = run_consolidation(
             self,
             llm=llm,
-            backend=backend,
+            backend=backend or self.config.get("consolidate.backend"),
             model=model,
             since_days=since_days,
             similarity_threshold=similarity_threshold,
@@ -70,7 +70,7 @@ class ReasoningMixin:
             max_clusters=max_clusters,
             dry_run=dry_run,
         )
-        if not dry_run:
+        if not dry_run and not result.get("n_failed", 0):
             try:
                 from pmb.health.auto_consolidate import mark_consolidation_done
 

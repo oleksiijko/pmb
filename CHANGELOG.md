@@ -2,12 +2,35 @@
 
 All notable changes to PMB are documented here.
 
-## [1.2.3] - 2026-08-16 - Version-consistency fix
+## [1.3.0] - Unreleased — Reliable local memory
+
+### Added
+- Verified workspace snapshots: SQLite online backup, SHA-256 file manifests,
+  `pmb snapshot verify`, and machine-readable `pmb snapshot list --json`.
+- Restore validates before changing memory, keeps a verified safety snapshot,
+  removes stale files, and rolls back file moves on an I/O failure.
 
 ### Fixed
-- **`pmb.__version__` now matches the release.** The 1.2.3 release bumped `pyproject.toml` but left the `__version__` constant (and the npm package version) at 1.2.2, so `pmb daemon status` / `pmb doctor` reported `v1.2.2` even after upgrading — which read as "the restart didn't work" and sent users chasing a non-existent stale-process bug. `__version__`, the npm package, and the CHANGELOG all agree on 1.2.3 now.
+- Ollama maintenance respects the model and endpoint saved in configuration.
+  Explicit arguments and environment variables still override saved values;
+  auto detection probes the same endpoint used for generation. HTTP model
+  errors are distinguished from an unreachable server (issue #81).
+- Consolidation honors the saved backend when no override is supplied, waits
+  for durable embedding completion, and labels dry-run results as previews.
+- Failed model calls return a nonzero consolidation exit status and keep source
+  events. Malformed decisions cannot authorize archiving.
+- Serialize inference through the shared embedding model to prevent native
+  crashes when recall overlaps the background embedding worker on macOS.
+- Tests no longer rewrite the developer's global Git identity. Dry-run write
+  isolation uses deterministic vectors instead of a platform-sensitive score.
+- Cold-write tests isolate model-load traps to their own engines, avoiding
+  interference from background work and running on every supported platform.
+- Local test scripts include the property and MCP integration suites; CI and
+  local development use the same pinned dependency constraints. Quarantine
+  failures remain visible, and skipped required jobs cannot turn CI green.
+- Package, npm, MCP registry, and citation versions agree on 1.3.0.
 
-## [Unreleased]
+### Previously merged fixes included in this release
 
 ### Fixed
 
@@ -18,6 +41,12 @@ All notable changes to PMB are documented here.
 
 ### Added
 - **OpenAI API backend support** across consolidation/reasoning, `pmb-chat`, graph extraction, autowrite summaries, config, doctor, and LLM command help. Uses stdlib HTTP; no OpenAI SDK dependency.
+
+
+## [1.2.3] - 2026-08-16 - Version-consistency fix
+
+### Fixed
+- **`pmb.__version__` now matches the release.** The 1.2.3 release bumped `pyproject.toml` but left the `__version__` constant (and the npm package version) at 1.2.2, so `pmb daemon status` / `pmb doctor` reported `v1.2.2` even after upgrading — which read as "the restart didn't work" and sent users chasing a non-existent stale-process bug. `__version__`, the npm package, and the CHANGELOG all agree on 1.2.3 now.
 
 ## [1.2.2] - 2026-06-29 - Dashboard port fallback and ambient watcher UX
 

@@ -16,8 +16,6 @@ that the CLI renders it without raising.
 """
 from __future__ import annotations
 
-import pytest
-
 from pmb.cli.commands import maintenance
 
 

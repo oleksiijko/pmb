@@ -770,7 +770,7 @@ def consolidate(
         False, "--if-due",
         help="Only consolidate when auto-trigger thresholds are met (per config)",
     ),
-    backend: str = typer.Option("auto", "--backend",
+    backend: str | None = typer.Option(None, "--backend",
                                 help="auto | claude | anthropic | openai | ollama. Auto prefers `claude` CLI if installed (no key needed), then Anthropic API, OpenAI API, then Ollama."),
     model: str | None = typer.Option(None, "--model",
                                         help="Override default model (e.g. 'haiku' for claude/anthropic, 'llama3.1:8b' for ollama)"),
@@ -792,6 +792,7 @@ def consolidate(
     source events.
     """
     eng = Engine()
+    backend = backend or eng.config.get("consolidate.backend")
     if auto_if_due:
         decision = eng.consolidation_due()
         if not decision.get("should_run"):
@@ -841,7 +842,9 @@ def consolidate(
         table.add_column("Result")
         table.add_column("Summary", overflow="fold")
         for r in result["results"]:
-            status = "[green]stored[/]" if r["consolidated"] else "[dim]skipped[/]"
+            status = "[dim]skipped[/]"
+            if r["consolidated"]:
+                status = "[yellow]would store[/]" if dry_run else "[green]stored[/]"
             table.add_row(
                 r["cluster_anchor"][:20],
                 str(r["cluster_size"]),
@@ -878,6 +881,10 @@ def consolidate(
                 )
         except Exception as e:
             console.print(f"[dim]keyed-suggestion step skipped: {e}[/]")
+
+    if result.get("n_failed", 0):
+        console.print(f"[red]{result['n_failed']} cluster(s) failed; their sources were kept.[/]")
+        raise typer.Exit(1)
 
 
 @app.command()
@@ -932,5 +939,3 @@ def doctor(
     rc = print_doctor(console, remote=remote)
     if rc != 0:
         raise typer.Exit(code=rc)
-
-

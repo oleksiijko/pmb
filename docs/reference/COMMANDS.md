@@ -190,7 +190,7 @@ pmb insights
 | `pmb restore <ulid>` | Restore a soft-deleted or archived memory. |
 | `pmb forget-topic <topic>` | Archive everything about a topic in one command (`--dry-run`, `--yes`, `--in content\|tag\|source`). |
 | `pmb pin <ulid>` | Pin a memory (max importance, never auto-archived). |
-| `pmb snapshot create\|list\|restore` | Local, offline, timestamped workspace snapshots. |
+| `pmb snapshot create\|list\|verify\|restore` | Verified local snapshots; `list --json` for scripts. |
 | `pmb decay` | Apply the forgetting curve (lowers importance, archives stale). |
 | `pmb dedupe` <span class="pmb-tag pmb-tag--llm">LLM optional</span> | Deduplicate. Offline cosine sweep by default; `--run-pending` uses an LLM for borderline pairs. |
 | `pmb compact` | Move old archived events to cold storage + VACUUM. |

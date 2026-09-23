@@ -15,6 +15,7 @@ from rich.table import Table
 
 from pmb.config import Config
 from pmb.core.workspace import detect_workspace
+from pmb.health.consolidate import OllamaClient
 
 console = Console()
 app = typer.Typer(no_args_is_help=True, help="Ollama integration - fully local LLM ops")
@@ -30,24 +31,14 @@ _RECOMMENDED = {
 
 
 def _ollama_url() -> str:
-    return (
-        os.environ.get("PMB_OLLAMA_URL")
-        or os.environ.get("OLLAMA_HOST")
-        or "http://localhost:11434"
-    )
+    return OllamaClient().base_url
 
 
-def _ping(url: str = None) -> bool:
-    url = url or _ollama_url()
-    try:
-        req = urllib.request.Request(f"{url.rstrip('/')}/api/tags")
-        with urllib.request.urlopen(req, timeout=2) as resp:
-            return resp.status == 200
-    except Exception:
-        return False
+def _ping(url: str | None = None) -> bool:
+    return OllamaClient.ping(base_url=url or _ollama_url())
 
 
-def _list_models(url: str = None) -> list[dict]:
+def _list_models(url: str | None = None) -> list[dict]:
     url = url or _ollama_url()
     try:
         req = urllib.request.Request(f"{url.rstrip('/')}/api/tags")
@@ -140,6 +131,8 @@ def use(
         workspace_dir=detect_workspace().storage_dir,
         pmb_home=Path(os.environ.get("PMB_HOME") or (Path.home() / ".pmb")),
     )
+    if backend_for not in {"all", "consolidate", "chat", "dedup"}:
+        raise typer.BadParameter("Choose all, consolidate, chat, or dedup.", param_hint="--for")
     cfg.set_global("ollama.model", model_name)
 
     if backend_for in ("all", "consolidate"):
@@ -184,11 +177,7 @@ def test():
         console.print(f"[red]Ollama not reachable at {url}[/]")
         raise typer.Exit(1)
 
-    cfg = Config(
-        workspace_dir=detect_workspace().storage_dir,
-        pmb_home=Path(os.environ.get("PMB_HOME") or (Path.home() / ".pmb")),
-    )
-    model = cfg.get("ollama.model") or "llama3.1:8b"
+    model = OllamaClient().model
     console.print(f"[bold]Testing {model} at {url}...[/]\n")
 
     import time

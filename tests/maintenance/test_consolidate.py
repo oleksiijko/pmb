@@ -141,21 +141,30 @@ def test_consolidation_stores_fact_and_archives_sources(tmp_pmb_home, tmp_worksp
         assert ev.archived_at is not None
 
 
-def test_consolidation_dry_run_does_not_write(tmp_pmb_home, tmp_workspace_dir):
-    eng = Engine(cwd=tmp_workspace_dir, pmb_home=tmp_pmb_home)
-    eng.record_fact("user prefers no comments in code")
-    eng.record_fact("don't add docstrings")
-    eng.record_fact("strip comments before commit")
-    llm = MockLLM(consolidate=True, summary="No comments.", confidence=0.9)
+def test_consolidation_dry_run_does_not_write(tmp_pmb_home, tmp_workspace_dir, monkeypatch):
+    import numpy as np
 
-    before = eng.events.count(eng.workspace.id)
-    result = eng.consolidate(llm=llm, similarity_threshold=0.3,
-                              min_cluster_size=3, dry_run=True)
-    after = eng.events.count(eng.workspace.id)
-    assert before == after  # nothing stored
-    assert result["n_archived"] == 0
-    # But the LLM was asked
-    assert len(llm.calls) >= 1
+    from pmb.core.events import Event
+
+    # This test checks write isolation, not the embedder's floating-point
+    # similarity around a threshold. Semantic clustering is tested separately.
+    with Engine(cwd=tmp_workspace_dir, pmb_home=tmp_pmb_home) as eng:
+        monkeypatch.setattr(eng.search, "embed", lambda text: np.ones(384, dtype=np.float32))
+        for content in ("user prefers no comments", "avoid docstrings", "strip comments"):
+            event = eng.events.append(Event(
+                workspace_id=eng.workspace.id, event_type="fact", content=content,
+            ))
+            eng.search.add(event.ulid, event.to_text())
+        llm = MockLLM(summary="Keep source files concise.", confidence=0.9)
+        before = eng.events.list_active(eng.workspace.id)
+        result = eng.consolidate(llm=llm, similarity_threshold=0.3,
+                                 min_cluster_size=3, dry_run=True)
+        assert eng.events.list_active(eng.workspace.id) == before
+        assert eng.events.count(eng.workspace.id) == 3
+        assert result["n_consolidated"] == 1
+        assert result["n_archived"] == 0
+        assert result["new_facts_created"] == 0
+        assert len(llm.calls) == 1
 
 
 def test_consolidation_skips_low_confidence(tmp_pmb_home, tmp_workspace_dir):
@@ -510,3 +519,68 @@ def test_consolidation_preserves_pinned_sources(tmp_pmb_home, tmp_workspace_dir)
     p = eng.events.get_by_ulid(pinned)
     assert p.archived_at is None
     assert p.importance >= 0.99
+
+
+def test_malformed_llm_fields_cannot_authorize_archiving():
+    import json
+
+    for patch in ({"consolidate": "false"}, {"confidence": "high"}, {"confidence": True},
+                  {"confidence": float("nan")}, {"confidence": 2}, {"summary": None},
+                  {"summary": "   "}):
+        payload = {"consolidate": True, "summary": "A rule", "confidence": 0.9, **patch}
+        assert _parse_llm_json(json.dumps(payload))["consolidate"] is False
+    for raw in ("[]", "null", "1"):
+        assert _parse_llm_json(raw)["consolidate"] is False
+
+
+def test_consolidation_waits_for_last_inflight_embedding(isolated_engine, monkeypatch):
+    import threading
+    import time
+
+    from pmb.core.embed_queue import PersistentEmbedQueue
+    from pmb.health.consolidate import _drain_pending_embeds
+
+    engine = isolated_engine
+    queue = PersistentEmbedQueue(engine.workspace.db_path)
+    queue.enqueue("last-item", "memory")
+    engine._durable_embed_queue = queue
+    engine._embed_worker_started = True
+    monkeypatch.setattr(engine.search, "_model", object())
+    entered = threading.Event()
+    def finish():
+        entered.set()
+        time.sleep(0.05)
+        queue.drain_once(lambda ulid, text: None)
+    thread = threading.Thread(target=finish)
+    thread.start()
+    assert entered.wait(timeout=1)
+    try:
+        assert _drain_pending_embeds(engine, timeout_s=2) == 0
+        assert queue.pending_count() == 0
+    finally:
+        thread.join(timeout=2)
+
+
+def test_llm_failure_keeps_sources_and_returns_nonzero_cli(isolated_engine, monkeypatch):
+    from typer.testing import CliRunner
+
+    from pmb.cli.commands import maintenance
+    from pmb.cli.main import app
+    from pmb.core.events import Event
+    from pmb.health.consolidate import Cluster
+
+    engine = isolated_engine
+    events = [engine.events.append(Event(
+        workspace_id=engine.workspace.id, event_type="fact", content=f"Source {i}",
+    )) for i in range(3)]
+    cluster = Cluster(events[0].ulid, [event.ulid for event in events], 0.9)
+    monkeypatch.setattr("pmb.health.consolidate.cluster_events", lambda *args, **kwargs: [cluster])
+    monkeypatch.setattr("pmb.health.consolidate.resolve_llm_client",
+                        lambda **kwargs: MockLLM(raise_error=True))
+    engine.config.set_workspace("consolidate.suggest_keyed", False)
+    monkeypatch.setattr(maintenance, "Engine", lambda: engine)
+    result = CliRunner().invoke(app, ["consolidate"])
+    assert result.exit_code == 1
+    assert "1 cluster(s) failed" in result.stdout
+    assert len(engine.events.list_active(engine.workspace.id)) == 3
+    assert not (engine.workspace.storage_dir / "consolidation_state.yaml").exists()
