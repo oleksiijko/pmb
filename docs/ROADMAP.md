@@ -20,6 +20,16 @@ were **deleted**; many languages now ride one mechanism instead of a pack each:
   A blocking CI gate runs the eval with packs off so recall can't silently
   regress. See [Adding a language](contributing/adding-a-language.md).
 
+## Prepared — v1.3.0 "Reliable local memory"
+
+- Verified SQLite snapshots and recovery, including checksums and safety copies.
+- Saved Ollama model/endpoint selection used consistently by maintenance.
+- Shared embedding inference protected against concurrent native-runtime crashes.
+- Reproducible CI dependency constraints and complete local test entry points.
+
+The release candidate must pass the full CI matrix before publication.
+See [project assessment](PROJECT_REVIEW.md) for follow-up priorities.
+
 ## Next
 
 - **Validate ALD on real traffic.** The distillation loop is proven in tests; the

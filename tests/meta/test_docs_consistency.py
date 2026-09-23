@@ -7,6 +7,7 @@ changelog and the config reference can't silently drift from the code:
 """
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -45,3 +46,15 @@ def test_config_keys_are_well_formed():
     from pmb.config import SCHEMA
     bad = [k for k in SCHEMA if not re.fullmatch(r"[a-z0-9_]+\.[a-z0-9_.]+", k)]
     assert not bad, f"malformed config keys: {bad}"
+
+
+def test_distribution_versions_match():
+    import yaml
+
+    import pmb
+
+    assert json.loads(_read("npm/package.json"))["version"] == pmb.__version__
+    server = json.loads(_read("server.json"))
+    assert server["version"] == pmb.__version__
+    assert all(package["version"] == pmb.__version__ for package in server["packages"])
+    assert yaml.safe_load(_read("CITATION.cff"))["version"] == pmb.__version__

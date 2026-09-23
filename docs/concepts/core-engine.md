@@ -192,3 +192,20 @@ token, and put it behind a private network such as Tailscale or an SSH tunnel.
 | MCP tools and server | `src/pmb/mcp/tools.py`, `src/pmb/mcp/server.py` |
 | Warm daemon and proxy | `src/pmb/mcp/daemon.py`, `src/pmb/cli/commands/hooks.py` |
 | CLI command groups | `src/pmb/cli/commands/` |
+
+## Snapshot and maintenance APIs
+
+- `core.snapshots.create_snapshot(workspace, note)` publishes a verified local
+  snapshot after SQLite backup and file hashing finish.
+- `core.snapshots.verify_snapshot(path, workspace_id)` checks the manifest,
+  workspace, files, and SQLite integrity; legacy snapshots lack file hashes.
+- `core.snapshots.restore_snapshot(workspace, id)` validates and stages incoming
+  files, creates a safety snapshot, replaces workspace files, and rolls back
+  file moves on an I/O error. Callers must stop all writers first.
+- `core.snapshots.snapshot_path(workspace, id)` restricts user-supplied IDs to
+  direct, non-symlink snapshot directories.
+- `health.consolidate.OllamaClient` resolves saved model/URL settings and owns
+  generation response validation. `resolve_llm_client` probes that same URL.
+- Consolidation waits for the existing durable embedding queue, including its
+  in-flight item, before reading vectors. Shared model inference is serialized
+  by the process-wide model cache lock across workspaces.

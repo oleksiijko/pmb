@@ -5,33 +5,49 @@ Thanks for your interest. PMB is intentionally small and opinionated; here is wh
 ## Development setup
 
 ```bash
-git clone <repo-url> pmb
+git clone https://github.com/oleksiijko/pmb.git
 cd pmb
 python -m venv .venv
 source .venv/bin/activate            # Windows: .venv\Scripts\activate
-pip install -e .
-pip install pytest                   # for tests
+pip install -c requirements-dev.lock -e ".[dev,crypto]"
+python scripts/prewarm_models.py
 ```
 
-Verify:
-
-```bash
-make test        # 88 passed in ~80s - the same set CI runs
-make test-smoke  # 9 passed in ~5s   - import-weight regression tests
-```
+The prewarm step downloads the essential multilingual embedder once. It fails
+clearly if that model is unavailable; optional CLIP/reranker downloads are
+best-effort. After prewarming, pytest loads models offline. A clean checkout
+must run this step before running model-dependent tests.
 
 ## Running tests
 
-**Use `make test`, not `pytest tests/` directly.** The full pytest target (`pytest tests/`) has a known deadlock: several modules trigger parallel `huggingface_hub` model downloads against the same on-disk cache, and the second downloader blocks waiting for a lock the first one hasn't released. Symptom: pytest hangs forever on collection.
+| Command | Coverage |
+|---|---|
+| `make test` or `bash scripts/test.sh` | Full blocking suite, including property and MCP integration tests |
+| `make test-core` | Smaller engine/security edit loop; not a release gate |
+| `make test-smoke` | Lightweight-import regression tests |
+| `python -m pytest tests/ -q -m quarantined` | Explicitly quarantined scenarios, also visible in CI |
+| `make lint` | Ruff over source, tests, and scripts |
 
-| Target | What it runs | When to use |
-|---|---|---|
-| `make test` (= `make test-core`) | 8 deterministic files from `.github/workflows/ci.yml`, 88 tests | Default during development; matches CI |
-| `make test-smoke` | `tests/meta/test_lightweight_imports.py`, 9 tests | After touching `pmb/__init__.py` or any module added to the lazy-attribute table |
-| `make test-all-WARN` | The full `tests/` directory | Only if your HF cache is already populated; otherwise it will hang |
-| `pytest tests/test_X.py` | One specific file | Reproducing a single failure |
+CI runs Python 3.11–3.13 on Linux and Windows, plus Python 3.12 on macOS.
+Numerical/timing tests marked `platform_sensitive` gate on Linux; they are
+excluded from the Windows/macOS matrix. The local default runs them too.
+Whole-package coverage must remain at least 61%. Tests use temporary PMB homes
+and Git settings; they must not modify the contributor's memory or identity.
 
-If you add a new test that depends on a HuggingFace download, please mark it (`@pytest.mark.heavy`, manual `pytest -k`) and document why - we'd rather not grow the deadlock surface.
+`requirements-dev.lock` pins the dependency set used by CI and development
+without restricting downstream users to exact versions. To refresh it deliberately:
+
+```bash
+uv pip compile pyproject.toml --extra dev --extra crypto --universal --output-file requirements-dev.lock
+pip install -c requirements-dev.lock -e ".[dev,crypto]"
+python scripts/prewarm_models.py
+make test
+make lint
+```
+
+Review the dependency diff and full CI matrix before merging an update.
+There is no configured static type checker yet; syntax compilation and Ruff
+are not a substitute for one.
 
 ## Project layout
 

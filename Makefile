@@ -38,7 +38,7 @@ install:
 	pip install -e .
 
 dev:
-	pip install -e ".[dev]"
+	pip install -c requirements-dev.lock -e ".[dev,crypto]"
 
 # --------------------------------------------------------------------------
 # Tests. CI runs the whole suite on Linux, Windows, and macOS, excluding only

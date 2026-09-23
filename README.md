@@ -145,6 +145,21 @@ follow-rate, dead-lesson detection), **Duplicates** (inline merge),
 
 ---
 
+## Verified local backups
+
+```bash
+pmb snapshot create --note "before maintenance"
+pmb snapshot list
+pmb snapshot verify <snapshot-id>
+# Stop PMB servers, agent connections, and dashboards before restoring.
+pmb snapshot restore <snapshot-id>
+```
+
+Snapshots use SQLite online backup to include committed WAL data and record
+file checksums. Restore checks the snapshot before changing memory and saves
+a verified copy of the previous state. Use `pmb snapshot list --json` in scripts.
+See [backup and recovery](docs/guide/backups.md) for scope and limitations.
+
 ## What you can store
 
 ```bash
@@ -438,7 +453,8 @@ discussion before a large change so we can align on direction.
 ```bash
 git clone https://github.com/oleksiijko/pmb.git && cd pmb
 python -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
+pip install -c requirements-dev.lock -e ".[dev,crypto]"
+python scripts/prewarm_models.py
 pytest                  # full suite, ~4 minutes
 pytest -k recall        # fast subset, ~12 s
 ```

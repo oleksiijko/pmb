@@ -39,8 +39,12 @@ Tag / untag a memory for local organization.
 ### `pmb ttl <ulid> 30d | clear` · `pmb prune-expired`
 Set/clear an expiry; archive memories past their TTL (run from cron).
 
-### `pmb snapshot create | list | restore`
-Local, offline, timestamped workspace snapshots.
+### `pmb snapshot create | list | verify | restore`
+Local snapshots with SQLite online backup and SHA-256 file manifests.
+`verify <id>` checks integrity without restoring; `list --json` prints metadata.
+Stop PMB servers, agents, and dashboards before restoring. Restore validates
+first, saves a verified safety copy, replaces stale files, and rolls back file
+moves on an I/O error. Legacy snapshots have no file checksums.
 
 ### `pmb decay` · `pmb dedupe` · `pmb compact`
 Apply the forgetting curve; deduplicate (offline cosine by default;

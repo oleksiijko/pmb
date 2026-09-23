@@ -173,3 +173,22 @@ ollama pull llama3.1:8b      # re-pulls latest of same tag
 ollama pull llama3.2:3b      # different model
 pmb ollama use llama3.2:3b   # tell PMB about the new one
 ```
+
+## Model and endpoint precedence
+
+Maintenance clients use explicit model/URL arguments first, then
+`PMB_OLLAMA_MODEL` / `PMB_OLLAMA_URL` (or `OLLAMA_HOST` for the URL), then
+workspace/global `ollama.model` and `ollama.url`, then built-in defaults.
+`pmb ollama status` and `pmb ollama test` use the same settings.
+`pmb consolidate` honors `consolidate.backend` unless `--backend` is supplied;
+`--backend auto` explicitly requests auto detection.
+
+```bash
+pmb ollama use llama3.2:3b --for consolidate
+pmb config set ollama.url http://localhost:11434
+pmb consolidate --dry-run
+```
+
+An HTTP 404 from a running Ollama server can mean the selected model is missing.
+Check `ollama list` and pull that exact model; it is distinct from a connection
+failure. Embedding-model settings remain separate from generation-model settings.

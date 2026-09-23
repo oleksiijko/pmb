@@ -12,6 +12,11 @@ include CONTRIBUTING.md
 include SECURITY.md
 include pyproject.toml
 include Makefile
+include requirements-dev.lock
+include server.json
+include npm/package.json
+include scripts/prewarm_models.py
+include scripts/test.sh
 
 # Documentation
 recursive-include docs *.md
