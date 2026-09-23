@@ -75,8 +75,7 @@ versions must be checked by the PR's CI matrix before publication.
 
 Initial post-fix full run: 1593 passed. Final functional run: 1630 passed,
 3 skipped, 1 quarantined test deselected; the quarantined test also passes when
-run separately. Coverage checkpoint: 67.12% (1624 tests before the last six
-regression additions). The built wheel was installed in a separate Python 3.14
+run separately. Final coverage: 67.28% (1630 tests). The built wheel was installed in a separate Python 3.14
 environment and exercised through real CLI subprocesses: help, stats, config,
 doctor, writes, snapshot creation, verification, and restore. This smoke test
 does not replace the supported Python-version CI matrix.

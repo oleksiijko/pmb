@@ -38,7 +38,7 @@ and Git settings; they must not modify the contributor's memory or identity.
 without restricting downstream users to exact versions. To refresh it deliberately:
 
 ```bash
-uv pip compile pyproject.toml --extra dev --extra crypto --universal --output-file requirements-dev.lock
+uv pip compile pyproject.toml --extra dev --extra crypto --universal --python-version 3.11 --output-file requirements-dev.lock
 pip install -c requirements-dev.lock -e ".[dev,crypto]"
 python scripts/prewarm_models.py
 make test
