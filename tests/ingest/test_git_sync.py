@@ -39,11 +39,12 @@ def _make_bare_remote(d: Path) -> str:
 
 
 @pytest.fixture
-def env():
+def env(monkeypatch):
     """Yield (workspace_dir, remote_url, pmb_home) on a temp tree with git
     identity configured so commits don't fail in CI."""
     with tempfile.TemporaryDirectory() as t:
         root = Path(t)
+        monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(root / "gitconfig"))
         # Git identity + default branch BEFORE creating any repo, so the bare
         # remote advertises `main` as its default (matches GitHub). Without
         # this, a runner whose git defaults to `master` makes the bare HEAD
@@ -51,7 +52,7 @@ def env():
         for k, v in [("user.email", "ci@pmb.test"), ("user.name", "PMB CI"),
                      ("init.defaultBranch", "main")]:
             subprocess.run(["git", "config", "--global", k, v],
-                           capture_output=True, text=True)
+                           capture_output=True, text=True, check=True)
         ws = root / "workspaces" / "test"
         _seed_workspace(ws)
         remote = _make_bare_remote(root / "remote.git")

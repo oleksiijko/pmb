@@ -41,6 +41,7 @@ from typing import TYPE_CHECKING, Protocol
 import numpy as np
 
 if TYPE_CHECKING:
+    from pmb.config import Config
     from pmb.core.engine import Engine
 
 
@@ -386,12 +387,20 @@ class OllamaClient:
         model: str | None = None,
         base_url: str | None = None,
         timeout: float = 60.0,
+        config: Config | None = None,
     ):
-        self.model = model or os.environ.get("PMB_OLLAMA_MODEL") or DEFAULT_OLLAMA_MODEL
+        from pmb.config import Config
+        from pmb.core.workspace import detect_workspace
+
+        if config is None:
+            workspace = detect_workspace()
+            config = Config(workspace_dir=workspace.storage_dir, pmb_home=workspace.pmb_home)
+        self.model = model or os.environ.get("PMB_OLLAMA_MODEL") or config.get("ollama.model")
         self.base_url = (
             base_url
             or os.environ.get("PMB_OLLAMA_URL")
             or os.environ.get("OLLAMA_HOST")
+            or config.get("ollama.url")
             or DEFAULT_OLLAMA_URL
         ).rstrip("/")
         self.timeout = timeout
@@ -414,57 +423,46 @@ class OllamaClient:
             + f"Cluster of {len(events_text)} memory items:\n\n{joined}\n\n"
             + "Output JSON now."
         )
-        payload = {
-            "model": self.model,
-            "prompt": prompt,
-            "stream": False,
-            "format": "json",
-            "options": {"temperature": 0.2, "num_predict": 400},
-        }
-        body = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(
-            f"{self.base_url}/api/generate",
-            data=body,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                raw = resp.read().decode("utf-8")
-        except urllib.error.URLError as e:
-            raise RuntimeError(
-                f"Ollama unreachable at {self.base_url} ({e}). "
-                f"Start it with `ollama serve` and `ollama pull {self.model}`."
-            ) from e
-        try:
-            data = json.loads(raw)
-            text = data.get("response", "")
-        except json.JSONDecodeError as e:
-            raise RuntimeError(f"Ollama returned invalid JSON envelope: {e}") from e
-        return _parse_llm_json(text)
+        return _parse_llm_json(self._generate(prompt, max_tokens=400, json_mode=True))
 
     def complete(self, prompt: str, max_tokens: int = 800) -> str:
-        """Generic prompt → text. Same HTTP call as consolidate, but no JSON-mode."""
+        return self._generate(prompt, max_tokens=max_tokens)
+
+    def _generate(self, prompt: str, *, max_tokens: int, json_mode: bool = False) -> str:
         payload = {
             "model": self.model,
             "prompt": prompt,
             "stream": False,
             "options": {"temperature": 0.2, "num_predict": max_tokens},
         }
-        body = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(
+        if json_mode:
+            payload["format"] = "json"
+        request = urllib.request.Request(
             f"{self.base_url}/api/generate",
-            data=body,
+            data=json.dumps(payload).encode("utf-8"),
             headers={"Content-Type": "application/json"},
             method="POST",
         )
         try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                raw = resp.read().decode("utf-8")
-        except urllib.error.URLError as e:
-            raise RuntimeError(f"Ollama unreachable at {self.base_url} ({e})") from e
-        data = json.loads(raw)
-        return (data.get("response") or "").strip()
+            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                raw = response.read().decode("utf-8")
+        except urllib.error.HTTPError as error:
+            detail = error.read(1000).decode("utf-8", errors="replace")
+            raise RuntimeError(
+                f"Ollama HTTP {error.code} at {self.base_url} for model {self.model}: {detail}. "
+                f"Check `ollama list`; install the selected model with `ollama pull {self.model}`."
+            ) from error
+        except (urllib.error.URLError, TimeoutError) as error:
+            raise RuntimeError(f"Ollama unreachable at {self.base_url}: {error}") from error
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError as error:
+            raise RuntimeError("Ollama returned invalid JSON") from error
+        if not isinstance(data, dict) or not isinstance(data.get("response"), str):
+            raise RuntimeError("Ollama returned an invalid generation response")
+        if data.get("error"):
+            raise RuntimeError(f"Ollama generation failed: {data['error']}")
+        return data["response"].strip()
 
 
 # ----------------------------------------------------------------------
@@ -475,6 +473,8 @@ class OllamaClient:
 def resolve_llm_client(
     backend: str = "auto",
     model: str | None = None,
+    *,
+    config: Config | None = None,
 ) -> LLMClient:
     """
     Pick a backend.
@@ -520,13 +520,14 @@ def resolve_llm_client(
         return ClaudeCLIClient(model=model)
 
     if backend == "ollama":
-        if not OllamaClient.ping():
+        client = OllamaClient(model=model, config=config)
+        if not client.ping(base_url=client.base_url):
             raise RuntimeError(
                 "backend=ollama but Ollama is not reachable at "
-                f"{DEFAULT_OLLAMA_URL}. Start it with `ollama serve` and pull "
-                f"a model with `ollama pull {DEFAULT_OLLAMA_MODEL}`."
+                f"{client.base_url}. Start it with `ollama serve` and pull "
+                f"a model with `ollama pull {client.model}`."
             )
-        return OllamaClient(model=model)
+        return client
 
     if backend == "auto":
         if ClaudeCLIClient.available():
@@ -535,8 +536,9 @@ def resolve_llm_client(
             return AnthropicHaikuClient(model=model)
         if os.environ.get("OPENAI_API_KEY"):
             return OpenAIClient(model=model)
-        if OllamaClient.ping():
-            return OllamaClient(model=model)
+        client = OllamaClient(model=model, config=config)
+        if client.ping(base_url=client.base_url):
+            return client
         raise RuntimeError(
             "No LLM backend available. Pick one:\n"
             "  - install Claude Code so `claude` is in PATH (no key, recommended), or\n"
@@ -567,12 +569,20 @@ def _parse_llm_json(text: str) -> dict:
         t = t[a:b + 1]
     try:
         data = json.loads(t)
-    except Exception:
+    except json.JSONDecodeError:
+        data = None
+    if (not isinstance(data, dict)
+            or not isinstance(data.get("consolidate"), bool)
+            or not isinstance(data.get("summary", ""), str)
+            or not isinstance(data.get("confidence"), (int, float))
+            or isinstance(data.get("confidence"), bool)
+            or not 0 <= data["confidence"] <= 1
+            or (data["consolidate"] and not data.get("summary", "").strip())):
         return {"consolidate": False, "summary": "", "confidence": 0.0,
-                "reasoning": f"unparseable LLM output: {text[:100]}"}
+                "reasoning": "invalid consolidation response; sources left unchanged"}
     return {
-        "consolidate": bool(data.get("consolidate", False)),
-        "summary": str(data.get("summary", "")).strip(),
+        "consolidate": data["consolidate"],
+        "summary": data.get("summary", "").strip(),
         "confidence": float(data.get("confidence", 0.0)),
         "reasoning": str(data.get("reasoning", "")).strip(),
     }
@@ -613,14 +623,6 @@ def cluster_events(
     Skips events with no embedding in LanceDB. Pinned events (importance≥0.99)
     can still anchor a cluster but won't be archived during consolidation.
     """
-    # If the engine has pending async embeds (e.g. writes happened before
-    # the model finished loading), drain them first - otherwise LanceDB
-    # would be empty for these ulids and we'd return zero clusters.
-    try:
-        _drain_pending_embeds(engine, timeout_s=30.0)
-    except Exception:
-        pass
-
     cutoff = time.time() - since_days * 86400.0
     active = engine.events.list_active(engine.workspace.id, limit=20000)
     candidates = [
@@ -629,6 +631,10 @@ def cluster_events(
     ]
     if len(candidates) < min_cluster_size:
         return []
+
+    remaining = _drain_pending_embeds(engine)
+    if remaining:
+        raise RuntimeError(f"Consolidation is waiting for {remaining} embeddings; retry after warmup.")
 
     # Fetch embeddings from LanceDB for these ulids
     ulid_set = {e.ulid for e in candidates}
@@ -693,6 +699,7 @@ class ConsolidationResult:
     reasoning: str = ""
     new_ulid: str | None = None
     archived_source_ulids: list[str] = field(default_factory=list)
+    error: str | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -705,33 +712,23 @@ class ConsolidationResult:
             "reasoning": self.reasoning,
             "new_ulid": self.new_ulid,
             "archived_source_ulids": self.archived_source_ulids,
+            "error": self.error,
         }
 
 
 MIN_CONFIDENCE_TO_STORE = 0.6
 
 
-def _drain_pending_embeds(engine, timeout_s: float = 30.0) -> int:
-    """Wait until the engine's async embed queue is empty (or timeout).
-
-    Returns the number of items still pending at exit (0 on success).
-    Safe to call when there's no queue, no model, or no pending work.
-    """
-    queue = getattr(engine, "_embed_queue", None)
-    if not queue:
+def _drain_pending_embeds(engine: Engine, timeout_s: float = 30.0) -> int:
+    """Wait for durable completion, including the worker's in-flight item."""
+    durable = engine._durable_embed_queue
+    if not engine._embed_queue and (durable is None or not durable.pending_count()):
         return 0
-    # Trigger model load + worker so it actually drains
-    try:
-        _ = engine.search.model
-    except Exception:
-        pass
-    deadline = time.time() + timeout_s
-    while time.time() < deadline:
-        remaining = len(getattr(engine, "_embed_queue", []) or [])
-        if remaining == 0:
-            return 0
-        time.sleep(0.2)
-    return len(getattr(engine, "_embed_queue", []) or [])
+    _ = engine.search.model
+    if not engine._embed_worker_started:
+        engine._kick_embed_drain()
+    state = engine.wait_for_embed_queue(timeout_seconds=timeout_s)
+    return state["in_memory_remaining"] + state["durable_remaining"]
 
 
 def _summary_looks_like_copy(summary: str, source_texts: list[str],
@@ -791,16 +788,7 @@ def run_consolidation(
     consumers that expect the older naming.
     """
     if llm is None:
-        llm = resolve_llm_client(backend=backend, model=model)
-
-    # Sleep / consolidation reads embeddings from LanceDB to cluster events.
-    # If the engine's async embed queue hasn't drained yet (e.g. a freshly-
-    # populated workspace where writes happened before the model loaded),
-    # clustering would see 0 candidates. Force-drain here:
-    try:
-        _drain_pending_embeds(engine, timeout_s=30.0)
-    except Exception:
-        pass
+        llm = resolve_llm_client(backend=backend, model=model, config=engine.config)
 
     clusters = cluster_events(
         engine,
@@ -830,6 +818,7 @@ def run_consolidation(
                 avg_similarity=cluster.avg_similarity,
                 consolidated=False,
                 reasoning=f"llm error: {e}",
+                error=str(e),
             ))
             continue
 
@@ -896,6 +885,7 @@ def run_consolidation(
         "n_consolidated": n_consolidated,
         "n_archived": n_archived,
         "n_rejected_verbatim_copies": n_rejected_copies,
+        "n_failed": sum(r.error is not None for r in results),
         "dry_run": dry_run,
         "results": [r.to_dict() for r in results],
         # aliases (intuitive names for consumers / dashboards)

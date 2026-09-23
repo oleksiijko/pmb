@@ -53,3 +53,32 @@ def test_embedding_model_cache_loads_once(monkeypatch):
 
 def test_cross_encoder_cache_loads_once(monkeypatch):
     _exercise_cache(monkeypatch, search._CrossEncoderCache, "_CrossEncoder")
+
+
+def test_shared_model_inference_is_serialized_across_workspaces(tmp_path):
+    import numpy as np
+
+    active = threading.Lock()
+    gate = threading.Barrier(8)
+
+    class Model:
+        def encode(self, texts, **kwargs):
+            assert active.acquire(blocking=False), "Concurrent use of shared native model"
+            try:
+                time.sleep(0.01)
+                return np.ones((len(texts), 384), dtype=np.float32)
+            finally:
+                active.release()
+
+    model = Model()
+    indexes = [search.HybridSearch(tmp_path / str(i)) for i in range(8)]
+    for index in indexes:
+        index._model = model
+
+    def embed(i):
+        gate.wait(timeout=5)
+        return indexes[i].embed("query") if i % 2 else indexes[i].embed_batch(["a", "b"])
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(embed, range(8)))
+    assert [result.shape for result in results] == [(2, 384), (384,)] * 4
