@@ -26,6 +26,7 @@ new embedding backend, or cloud service is needed for this release.
 | In-flight embedding missed | Consolidation watched only an in-memory list, whose item is removed before embedding finishes | Wait on the existing durable queue; test its last in-flight item |
 | Unreliable recovery copy | Snapshot code checkpointed best-effort then copied SQLite/WAL files independently | Online SQLite backup, file hashes, integrity check, staged publication and verified recovery |
 | Tests modify developer identity | `test_git_sync.env` invoked `git config --global` against the real user file | Isolate global Git config in the temporary test directory |
+| Cold-write test intercepts unrelated engines | Linux CI exposed background model loads counted by a process-wide test trap | Scope the trap to the tested engine and remove its platform exclusion |
 | Test entry points disagree | CONTRIBUTING describes an obsolete 88-test subset; shell script omits property/MCP suites | Document prewarming and run the complete blocking suite from every default entry point |
 | Distribution versions drift | MCP manifest still said 1.2.2; citation said 0.2.1 | Align versions and add a cross-distribution regression check |
 

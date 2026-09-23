@@ -17,8 +17,6 @@ from __future__ import annotations
 import sqlite3
 import time
 
-import pytest
-
 from pmb.core.engine import Engine
 from pmb.core.search import HybridSearch
 
@@ -28,23 +26,27 @@ def _items(n: int = 3) -> list[dict]:
             for i in range(n)]
 
 
-# platform_sensitive: the passive embed-worker timing under Windows-CI memory
-# pressure can trip the model trap; deterministic + green on the Linux gate.
-@pytest.mark.platform_sensitive
 def test_cold_record_batch_never_touches_the_model(tmp_pmb_home, tmp_workspace_dir,
                                                    monkeypatch):
     touched: dict = {}
 
-    def _trap(self):  # noqa: ANN001
-        touched["model"] = True
-        raise AssertionError("model load triggered on the cold write path")
+    # Other engines may still be draining writes from earlier tests. Scope the
+    # trap to this engine's search class so their legitimate loads cannot count
+    # as a violation of the cold-write contract.
+    unrelated = HybridSearch(tmp_workspace_dir / "unrelated-vectors")
+    unrelated._model = object()
 
-    monkeypatch.setattr(HybridSearch, "model", property(_trap))
-    # Hermetic "truly cold process": earlier tests in this pytest process may
-    # have warmed the process-wide _ModelCache, which the passive worker is
-    # ALLOWED to adopt (peek, not load). Neutralize the peek so this test pins
-    # the cold-process guarantee regardless of suite order.
-    monkeypatch.setattr(HybridSearch, "attach_cached_model", lambda self: False)
+    class ColdSearch(HybridSearch):
+        @property
+        def model(self):
+            touched["model"] = True
+            raise AssertionError("model load triggered on the cold write path")
+
+        def attach_cached_model(self) -> bool:
+            return False
+
+    monkeypatch.setattr("pmb.core.engine.base.HybridSearch", ColdSearch)
+    assert unrelated.model is unrelated._model
     eng = Engine(cwd=tmp_workspace_dir, pmb_home=tmp_pmb_home,
                  config_overrides={"recall.cache_size": 0})
 
@@ -72,11 +74,13 @@ def test_eager_autoload_opt_in_restores_old_behavior(tmp_pmb_home, tmp_workspace
                                                      monkeypatch):
     touched: dict = {}
 
-    def _trap(self):  # noqa: ANN001
-        touched["model"] = True
-        raise RuntimeError("stop before the real (slow) load")
+    class EagerSearch(HybridSearch):
+        @property
+        def model(self):
+            touched["model"] = True
+            raise RuntimeError("stop before the real (slow) load")
 
-    monkeypatch.setattr(HybridSearch, "model", property(_trap))
+    monkeypatch.setattr("pmb.core.engine.base.HybridSearch", EagerSearch)
     eng = Engine(cwd=tmp_workspace_dir, pmb_home=tmp_pmb_home,
                  config_overrides={"recall.cache_size": 0,
                                    "embed.queue_autoload": True})

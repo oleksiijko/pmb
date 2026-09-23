@@ -23,6 +23,8 @@ All notable changes to PMB are documented here.
   crashes when recall overlaps the background embedding worker on macOS.
 - Tests no longer rewrite the developer's global Git identity. Dry-run write
   isolation uses deterministic vectors instead of a platform-sensitive score.
+- Cold-write tests isolate model-load traps to their own engines, avoiding
+  interference from background work and running on every supported platform.
 - Local test scripts include the property and MCP integration suites; CI and
   local development use the same pinned dependency constraints. Quarantine
   failures remain visible, and skipped required jobs cannot turn CI green.
