@@ -492,14 +492,16 @@ def run_auto_context(
         res.latency_ms = int((time.perf_counter() - t0) * 1000)
         return res
 
-    # Non-message noise: task-notification / system-reminder / raw tool-output
-    # blocks get routed through the hook the same as user text, but they are
-    # NOT requests. Surfacing memory on them is pure noise - on the real
-    # workspace this was ~half of all lesson surfaces. Skip before classifying.
+    # Non-message noise: task-notification / system-reminder / subagent
+    # hand-back / raw tool-output blocks get routed through the hook the same
+    # as user text, but they are NOT requests. Surfacing memory on them is pure
+    # noise - on the real workspace this was ~half of all lesson surfaces.
+    # Skip before classifying.
     _head = msg.lstrip()[:120].lower()
     if any(mk in _head for mk in (
         "<task-notification>", "<system-reminder>", "[system notification",
         "<tool-use-id>", "<command-name>", "<local-command",
+        "<agent-message", "[subagent hand-back]",
     )):
         res.intents = [Intent.SKIP]
         res.skipped = True
