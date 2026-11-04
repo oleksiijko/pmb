@@ -91,10 +91,11 @@ def _has(args: list[str], name: str) -> bool:
 
 
 def _workspace_hint() -> str | None:
-    # Cheap, Engine-free workspace signal so the daemon can refuse to serve a
-    # different workspace's memory (S4). PMB_WORKSPACE is the reliable case;
-    # otherwise None and the daemon best-effort serves its own.
-    return os.environ.get("PMB_WORKSPACE") or None
+    # Engine-free workspace signal so the daemon can refuse to serve a
+    # different workspace's memory (S4). Resolved from cwd when PMB_WORKSPACE
+    # is unset; otherwise a daemon started in project A answers project B.
+    from pmb.core.workspace import workspace_hint
+    return workspace_hint()
 
 
 # ── daemon transport ────────────────────────────────────────────────
@@ -136,6 +137,8 @@ def _daemon_request(route: str, payload: dict, timeout: float) -> dict | None:
     """One localhost POST to a live, version-matched daemon. None on ANY
     failure (so the caller falls back). Light imports only. On a version
     mismatch it retires the stale daemon (S3) before returning None."""
+    if not payload.get("workspace"):
+        return None  # unnamed → the daemon would serve its own workspace; go cold
     try:
         import pmb
         from pmb.mcp.daemon import read_daemon_token

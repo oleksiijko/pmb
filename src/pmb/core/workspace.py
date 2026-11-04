@@ -234,6 +234,18 @@ def detect_workspace(
     return _build_workspace(ws_id, cwd.name, cwd, pmb_home, "cwd")
 
 
+def workspace_hint() -> str | None:
+    """Workspace id a hook client sends to the shared daemon so it can refuse
+    to serve a different workspace's memory (S4). Same resolution as the
+    daemon's own build (PMB_WORKSPACE first, then config/default/git/cwd).
+    None when it can't be resolved - callers must then skip the daemon, since
+    an unnamed request is served whatever workspace the daemon holds."""
+    try:
+        return detect_workspace().id or None
+    except Exception:
+        return None
+
+
 def _build_workspace(ws_id: str, name: str, root: Path, pmb_home: Path, source: str) -> Workspace:
     storage = pmb_home / "workspaces" / ws_id
     if (storage / "meta.yaml").exists():
