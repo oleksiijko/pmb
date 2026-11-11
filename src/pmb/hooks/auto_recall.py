@@ -452,7 +452,7 @@ def _looks_conversational(
 
 
 _PASTED_RE = re.compile(
-    r"<pasted_content\b[^>]*>.*?(?:</pasted_content\b[^>]*>|\Z)",
+    r"<pasted_content(?:\s[^<>]*)?>.*?(?:</pasted_content\s*>|\Z)",
     re.DOTALL | re.IGNORECASE,
 )
 
@@ -504,7 +504,7 @@ def run_auto_context(
     # noise - on the real workspace this was ~half of all lesson surfaces.
     # Skip before classifying.
     _head = msg.lstrip()[:120].lower()
-    if any(mk in _head for mk in (
+    if _head.startswith((
         "<task-notification>", "<system-reminder>", "[system notification",
         "<tool-use-id>", "<command-name>", "<local-command",
         "<agent-message", "[subagent hand-back]",
@@ -533,11 +533,11 @@ def run_auto_context(
     correction_sig = None
     # Only the user's own words can be a correction: text the user pasted
     # (Claude Code wraps it in <pasted_content>) was written by someone else.
-    own = _PASTED_RE.sub(" ", msg).strip()
-    if correction_capture:
+    own = _PASTED_RE.sub(" ", msg).strip() if correction_capture else ""
+    if own:
         try:
             from pmb.hooks.correction_capture import detect_correction
-            correction_sig = detect_correction(own) if own else None
+            correction_sig = detect_correction(own)
         except Exception:
             correction_sig = None
     if correction_sig:

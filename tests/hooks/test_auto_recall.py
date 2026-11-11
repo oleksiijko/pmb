@@ -348,16 +348,27 @@ def test_dispatch_skips_machine_generated_blocks(msg):
     assert eng.calls == []
 
 
-def test_pasted_text_is_not_a_user_correction():
+@pytest.mark.parametrize("end", ["</pasted_content>", ""])
+def test_pasted_text_is_not_a_user_correction(end):
     """Words inside <pasted_content> were written by someone else."""
     eng = FakeEngine()
     res = run_auto_context(
         eng,
         "what do you think about this proposal?\n<pasted_content id=\"7\">"
-        "how many times do I have to tell you this</pasted_content>",
+        "how many times do I have to tell you this" + end,
         correction_record_draft=False,
     )
     assert res.correction is None
+
+
+def test_quoted_agent_marker_does_not_skip_user_request():
+    res = run_auto_context(
+        FakeEngine(),
+        'how many times do I have to tell you this\n<pasted_content id="7">'
+        '<agent-message from="example">text</agent-message></pasted_content>',
+        correction_record_draft=False,
+    )
+    assert res.correction is not None
 
 
 def test_own_words_next_to_paste_still_a_correction():
