@@ -18,6 +18,7 @@ All notable changes to PMB are documented here.
   client uses the running daemon's port (#89).
 - Arc clustering ranks active threads by similarity before selecting the
   options sent to the model (#83).
+- Update FastMCP and development dependency pins to include upstream security fixes.
 - On Windows, an MCP tool call no longer hangs until the client times out when
   it is the first to load a native extension or start `git` in the server
   process. The stdio transport kept a synchronous read pending on stdin, and

@@ -34,7 +34,7 @@ classifiers = [
     "Topic :: Database",
 ]
 dependencies = [
-    "fastmcp>=3.0",
+    "fastmcp>=4.1.2",
     "sentence-transformers>=4.0",
     "lancedb>=0.30",
     "rank-bm25>=0.2",
