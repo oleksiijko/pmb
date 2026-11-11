@@ -528,6 +528,41 @@ def _build_bearer_middleware(token: str):
     return _BearerAuthMiddleware
 
 
+def _isolate_stdio_stdin() -> None:
+    """Move the stdio transport off fd 0 (Windows).
+
+    The MCP stdio transport keeps a synchronous read pending on the stdin
+    pipe. While it is pending, Windows makes other operations on that pipe
+    wait for the client's next message: a seek on fd 0 (native runtimes do
+    this while loading extension modules) and the startup of any child
+    process that inherits stdin (``git``). The client sends nothing while it
+    waits for a tool result, so such a call hung until the client timed out.
+
+    Reading from a private, non-inheritable duplicate and pointing fd 0 at
+    the null device (the CRT then also points ``STD_INPUT_HANDLE`` at it)
+    leaves the transport as the pipe's only user. Acts only while
+    ``sys.stdin`` is still fd 0, so a stdin that was already moved is kept.
+    """
+    if os.name != "nt":
+        return
+    try:
+        if sys.stdin is None or sys.stdin.fileno() != 0:
+            return
+        private = os.dup(0)
+    except (AttributeError, OSError, ValueError):
+        return
+    try:
+        devnull = os.open(os.devnull, os.O_RDONLY)
+        try:
+            os.dup2(devnull, 0)
+        finally:
+            os.close(devnull)
+    except OSError:
+        os.close(private)
+        return
+    sys.stdin = open(private, encoding="utf-8", errors="replace")
+
+
 def main():
     """Entry point for `pmb-mcp` script.
 
@@ -559,6 +594,10 @@ def main():
             f"Use 'stdio' or 'streamable-http'.\n"
         )
         sys.exit(2)
+
+    if transport == "stdio":
+        # Before build_server(): its prewarm thread loads native extensions.
+        _isolate_stdio_stdin()
 
     host = os.environ.get("PMB_MCP_HOST", "127.0.0.1")
     try:

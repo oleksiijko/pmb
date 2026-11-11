@@ -11,6 +11,13 @@ All notable changes to PMB are documented here.
   removes stale files, and rolls back file moves on an I/O failure.
 
 ### Fixed
+- On Windows, an MCP tool call no longer hangs until the client times out when
+  it is the first to load a native extension or start `git` in the server
+  process. The stdio transport kept a synchronous read pending on stdin, and
+  Windows makes a seek on that pipe, or a child process that inherits it, wait
+  for the client's next message. A waiting client sends only its cancellation
+  (after 180 s in Copilot CLI). The server now reads from a private duplicate
+  and points fd 0 at the null device.
 - Ollama maintenance respects the model and endpoint saved in configuration.
   Explicit arguments and environment variables still override saved values;
   auto detection probes the same endpoint used for generation. HTTP model
