@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import json
 
+import numpy as np
+
 from pmb.core.engine import Engine
 from pmb.reasoning.arcs import (
     Arc,
@@ -156,6 +158,35 @@ def test_cluster_ignores_off_topic(tmp_pmb_home, tmp_workspace_dir):
     result = eng.cluster_events_into_arcs(limit=10, llm=stub)
     assert result["n_ignored"] == 1
     assert result["n_created"] == 0
+
+
+def test_cluster_offers_similar_arc_even_outside_recent_pool(
+    tmp_pmb_home, tmp_workspace_dir, monkeypatch,
+):
+    eng = Engine(cwd=tmp_workspace_dir, pmb_home=tmp_pmb_home)
+    db_path, workspace_id = eng.workspace.db_path, eng.workspace.id
+    expected = create_arc(db_path, Arc(
+        id=None, workspace_id=workspace_id, title="Postgres migration",
+    ))
+    for i in range(51):
+        create_arc(db_path, Arc(
+            id=None, workspace_id=workspace_id, title=f"Unrelated frontend change {i}",
+        ))
+    eng.record_fact("Postgres will be the production database")
+
+    def embed_batch(texts):
+        return np.array([(1, 0) if "Postgres" in text else (0, 1) for text in texts])
+
+    def complete(prompt):
+        assert f"[id={expected}] Postgres migration" in prompt
+        assert prompt.count("[id=") == 8
+        return json.dumps({"action": "join", "arc_id": expected})
+
+    monkeypatch.setattr(eng.search, "embed_batch", embed_batch)
+    result = eng.cluster_events_into_arcs(llm=complete, refresh_summaries=False)
+    assert result["n_joined"] == 1
+    assert result["n_created"] == 0
+    assert get_arc(db_path, expected).n_events == 1
 
 
 # ----------------------------------------------------------------------

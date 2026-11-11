@@ -326,6 +326,95 @@ def test_dispatch_skip_on_trivial():
     assert eng.calls == []
 
 
+@pytest.mark.parametrize("msg", [
+    # Markers that were already skipped: these must keep passing.
+    "<task-notification>\n<task-id>x</task-id>\n<status>completed</status>\n</task-notification>",
+    "<system-reminder>\nThe task tools haven't been used recently.\n</system-reminder>",
+    # Claude Code subagent hand-backs reach the hook as a user prompt (issue #84).
+    '<agent-message from="a1b2c3">\n[Subagent hand-back] The text below is the final report of '
+    "a subagent.\n  Done: updated settings.json hooks and verified the JSON parses.\n"
+    "</agent-message>",
+    '<AGENT-MESSAGE from="a1b2c3">\nThis was fixed again, it was wrong before.\n</AGENT-MESSAGE>',
+    "[Subagent hand-back] The text below is the final report of a subagent.\nFixed it again.",
+])
+def test_dispatch_skips_machine_generated_blocks(msg):
+    """Task notifications, system reminders and subagent hand-backs are not user requests."""
+    eng = FakeEngine()
+    res = run_auto_context(eng, msg)
+    assert res.skipped is True
+    assert res.skip_reason == "non-message (system/tool block)"
+    assert res.intents == [Intent.SKIP]
+    # No auto-context, no correction capture: the engine must not be queried at all.
+    assert eng.calls == []
+
+
+@pytest.mark.parametrize("end", ["</pasted_content>", ""])
+def test_pasted_text_is_not_a_user_correction(end):
+    """Words inside <pasted_content> were written by someone else."""
+    eng = FakeEngine()
+    res = run_auto_context(
+        eng,
+        "what do you think about this proposal?\n<pasted_content id=\"7\">"
+        "how many times do I have to tell you this" + end,
+        correction_record_draft=False,
+    )
+    assert res.correction is None
+
+
+def test_quoted_agent_marker_does_not_skip_user_request():
+    res = run_auto_context(
+        FakeEngine(),
+        'how many times do I have to tell you this\n<pasted_content id="7">'
+        '<agent-message from="example">text</agent-message></pasted_content>',
+        correction_record_draft=False,
+    )
+    assert res.correction is not None
+
+
+def test_own_words_next_to_paste_still_a_correction():
+    eng = FakeEngine()
+    res = run_auto_context(
+        eng,
+        "how many times do I have to tell you this\n"
+        "<pasted_content id=\"7\">some log output</pasted_content>",
+        correction_record_draft=False,
+    )
+    assert res.correction is not None
+
+
+def test_draft_quotes_own_words_not_paste():
+    """The draft keeps 280 chars; a long paste first must not push the
+    user's complaint out of it."""
+
+    @dataclass
+    class CapturingEngine(FakeEngine):
+        captured: list = field(default_factory=list)
+
+        def capture_correction(self, message, **kw):
+            self.captured.append(message)
+            return {"surface_id": 1}
+
+    eng = CapturingEngine()
+    res = run_auto_context(
+        eng,
+        '<pasted_content id="7">' + "log line\n" * 100 + "</pasted_content>\n"
+        "how many times do I have to tell you this",
+    )
+    assert res.correction is not None
+    assert eng.captured == ["how many times do I have to tell you this"]
+
+
+def test_side_agent_note_is_skipped():
+    eng = FakeEngine()
+    res = run_auto_context(
+        eng,
+        "Here is a note offered by a side agent:\n\n> Heads up. PMB "
+        "broke again, the old port was wrong.",
+    )
+    assert res.skipped is True
+    assert eng.calls == []
+
+
 def test_dispatch_past_query_calls_recall():
     eng = FakeEngine(
         recall_results=[

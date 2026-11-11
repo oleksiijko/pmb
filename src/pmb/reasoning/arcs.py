@@ -244,7 +244,8 @@ class ArcManager:
         key: 'join'/'create'/'ignore'.
         Caller persists the result.
         """
-        arc_list_text = self._format_arc_list(candidate_arcs)
+        shortlist = candidate_arcs[:self.max_arc_options]
+        arc_list_text = self._format_arc_list(shortlist)
         prompt = ARC_CLUSTER_PROMPT.format(
             event_content=(event.content or "")[:600],
             arc_list=arc_list_text,
@@ -269,6 +270,8 @@ class ArcManager:
                 arc_id = int(data.get("arc_id"))
             except (TypeError, ValueError):
                 return {"action": "ignore", "reason": "bad_arc_id"}
+            if not any(arc.id == arc_id for arc in shortlist):
+                return {"action": "ignore", "reason": "arc_not_offered"}
             out["arc_id"] = arc_id
         elif action == "create":
             title = str(data.get("new_title", "")).strip()[:80]
@@ -296,7 +299,6 @@ class ArcManager:
     def _format_arc_list(self, arcs: list[Arc]) -> str:
         if not arcs:
             return "  (no existing arcs)"
-        arcs = arcs[: self.max_arc_options]
         return "\n".join(
             f"  [id={a.id}] {a.title}: {a.summary[:120]}" for a in arcs
         )

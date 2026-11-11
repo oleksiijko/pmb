@@ -117,6 +117,75 @@ def test_workspace_matches_guard():
     assert _workspace_matches(eng, "otherproj") is False
 
 
+def _capture_daemon_bodies(monkeypatch):
+    """Stub a live daemon at the urlopen level; return the list of JSON bodies
+    clients POST to it."""
+    import urllib.request
+
+    import pmb
+
+    sent = []
+
+    class _Resp:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return json.dumps({"context": "X", "version": pmb.__version__}).encode()
+
+    def _fake_urlopen(req, timeout=None):
+        sent.append(json.loads(req.data.decode("utf-8")))
+        return _Resp()
+
+    monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+    monkeypatch.setattr("pmb.mcp.registry.find_live_daemon",
+                        lambda: {"host": "127.0.0.1", "port": 1}, raising=False)
+    monkeypatch.setattr("pmb.mcp.daemon.read_daemon_token", lambda: "tok",
+                        raising=False)
+    return sent
+
+
+def test_hook_requests_name_cwd_workspace_without_env(tmp_path, monkeypatch):
+    # S4: with PMB_WORKSPACE unset, both daemon paths (thin hook client and the
+    # cold CLI's daemon retry) must still name the cwd's workspace, so a daemon
+    # built in another project refuses instead of injecting its memory.
+    monkeypatch.delenv("PMB_WORKSPACE", raising=False)
+    monkeypatch.setenv("PMB_HOME", str(tmp_path / "home"))
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    monkeypatch.chdir(proj)
+    from pmb.core.workspace import detect_workspace
+    expected = detect_workspace().id
+
+    sent = _capture_daemon_bodies(monkeypatch)
+    import pmb.hookclient.__main__ as hc
+    from pmb.cli.commands.ambient import _try_daemon_prepare
+
+    assert hc._daemon_request("/internal/hook/session-restore",
+                              {"workspace": hc._workspace_hint()}, 1.0)
+    assert _try_daemon_prepare("hello", 4000) == "X"
+    assert [b.get("workspace") for b in sent] == [expected, expected]
+
+
+def test_unresolved_workspace_skips_daemon(monkeypatch):
+    # An unnamed request would be served whatever workspace the daemon holds,
+    # so when the hint can't be resolved both paths must go cold instead.
+    sent = _capture_daemon_bodies(monkeypatch)
+    monkeypatch.setattr("pmb.core.workspace.workspace_hint", lambda: None)
+    import pmb.hookclient.__main__ as hc
+    from pmb.cli.commands.ambient import _try_daemon_prepare
+
+    assert hc._daemon_request("/internal/hook/session-restore",
+                              {"workspace": hc._workspace_hint()}, 1.0) is None
+    assert _try_daemon_prepare("hello", 4000) is None
+    assert sent == []
+
+
 # ── S10: honest trace injection ─────────────────────────────────────
 
 def test_inject_trace_total_stamps_total_and_source():
@@ -142,6 +211,44 @@ def test_inject_trace_total_noop_without_trace():
 
 
 # ── cold-path stdout decode is pinned to UTF-8 (Cyrillic mojibake guard) ──
+
+def test_cold_cli_never_propagates_child_exit_code(monkeypatch):
+    """Regression: the cold path returned the child CLI's exit code. Claude Code
+    reads exit 2 from a UserPromptSubmit hook as "block the prompt", and stderr
+    is captured, so any CLI usage error silently blocked the user's turn."""
+    import subprocess as _sp
+
+    import pmb.hookclient.__main__ as hc
+
+    class _R:
+        returncode = 2
+        stdout = ""
+
+    monkeypatch.setattr(_sp, "run", lambda cmd, **kw: _R())
+    assert hc._exec_full_cli(["prepare-context", "--quiet"]) == 0
+
+
+def test_cold_prepare_context_accepts_prompt_starting_with_dash(monkeypatch):
+    """Regression: a prompt starting with "-" (a Markdown bullet) reached the
+    cold CLI as an unknown option → exit 2 → prompt blocked. The argv the hook
+    builds must parse with the real CLI, the prompt landing in MESSAGE."""
+    from typer.main import get_command
+
+    import pmb.hookclient.__main__ as hc
+    from pmb.cli._common import app
+
+    seen: dict = {}
+    monkeypatch.setattr(hc, "_daemon_request", lambda *a, **k: None)
+    monkeypatch.setattr(hc, "_exec_full_cli", lambda cli, **k: seen.setdefault("cli", cli) and 0)
+    monkeypatch.setattr(hc, "_read_stdin_utf8", lambda: json.dumps({"prompt": "- first bullet"}))
+    hc.cmd_prepare_context(["--quiet"])
+
+    name, *args = seen["cli"]
+    group = get_command(app)
+    cmd = group.get_command(group.make_context("pmb", [name]), name)
+    ctx = cmd.make_context(name, args)  # raises click.UsageError on a bad parse
+    assert ctx.params["message"] == "- first bullet"
+
 
 def test_cold_cli_decodes_child_stdout_as_utf8(monkeypatch):
     """Regression: the cold fallback ran `subprocess.run(..., text=True)` with no

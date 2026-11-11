@@ -97,7 +97,13 @@ def _try_daemon_prepare(msg: str, max_chars: int,
             return None
         host = info.get("host") or "127.0.0.1"
         tok = read_daemon_token() or ""
-        payload = _json.dumps({"message": msg, "max_chars": max_chars}).encode("utf-8")
+        # S4: name the workspace, or the daemon serves whichever one it holds.
+        from pmb.core.workspace import workspace_hint
+        workspace = workspace_hint()
+        if not workspace:
+            return None
+        payload = _json.dumps({"message": msg, "max_chars": max_chars,
+                               "workspace": workspace}).encode("utf-8")
         req = _url.Request(
             f"http://{host}:{int(info['port'])}/internal/hook/prepare-context",
             data=payload,

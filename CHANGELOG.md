@@ -11,6 +11,26 @@ All notable changes to PMB are documented here.
   removes stale files, and rolls back file moves on an I/O failure.
 
 ### Fixed
+- Cold prepare-context hooks accept prompts beginning with a dash and keep
+  the agent turn open if the fallback CLI fails (#92).
+- Hook requests name their workspace before asking a shared daemon for context.
+- Daemon restarts reuse the current address, and reconnecting an HTTP MCP
+  client uses the running daemon's port (#89).
+- Arc clustering ranks active threads by similarity before selecting the
+  options sent to the model (#83).
+- Update FastMCP and development dependency pins to include upstream security fixes.
+- On Windows, an MCP tool call no longer hangs until the client times out when
+  it is the first to load a native extension or start `git` in the server
+  process. The stdio transport kept a synchronous read pending on stdin, and
+  Windows makes a seek on that pipe, or a child process that inherits it, wait
+  for the client's next message. A waiting client sends only its cancellation
+  (after 180 s in Copilot CLI). The server now reads from a private duplicate
+  and points fd 0 at the null device.
+- Correction capture only reads the user's own words: text inside
+  `<pasted_content>` (a pasted log, a reply from another assistant) and
+  Claude Code side-agent notes no longer produce a false "CORRECTION
+  DETECTED" or a draft lesson. A draft made from a real correction quotes the
+  user's own words, not the paste.
 - Ollama maintenance respects the model and endpoint saved in configuration.
   Explicit arguments and environment variables still override saved values;
   auto detection probes the same endpoint used for generation. HTTP model
@@ -29,6 +49,9 @@ All notable changes to PMB are documented here.
   local development use the same pinned dependency constraints. Quarantine
   failures remain visible, and skipped required jobs cannot turn CI green.
 - Package, npm, MCP registry, and citation versions agree on 1.3.0.
+- Claude Code subagent hand-backs (`<agent-message ...>` prompts) are skipped
+  like `<task-notification>` blocks, so they no longer get auto-context or
+  trigger a false "CORRECTION DETECTED" and a draft lesson (issue #84).
 
 ### Previously merged fixes included in this release
 

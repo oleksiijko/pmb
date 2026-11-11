@@ -3,8 +3,7 @@
 > **You don't need this for local use.** The default `pmb connect <agent>`
 > keeps PMB local. Supported local clients use one warm daemon on
 > `127.0.0.1`; stdio-only clients such as Codex reach it through
-> `pmb mcp proxy`. This page is only for sharing one memory across several
-> machines or people.
+> `pmb mcp proxy`. This page covers shared memory and custom HTTP clients.
 
 PMB's memory is a SQLite file plus a vector index. By default it lives next
 to you and only your local agent talks to it. If you want **one shared
@@ -47,6 +46,49 @@ pmb connect claude-code --remote http://memo.local:8765/mcp \
 ```
 
 Same MCP, same tools, one shared memory.
+
+## Connect a local assistant
+
+For a voice assistant or another custom client on the same machine, start a
+server on loopback. Set the same `PMB_MCP_BEARER_TOKEN` in both processes.
+
+```bash
+pmb mcp serve --host 127.0.0.1 --port 8875 --workspace assistant
+```
+
+Store one fact per item after the assistant decides what should be remembered.
+Use a stable entity ID across languages and resolve aliases in the assistant.
+The metadata keys below are a convention for your integration. PMB stores
+them alongside the fact, and `importance` controls the fact's priority.
+
+```python
+import asyncio
+import os
+
+from fastmcp import Client
+
+
+async def remember() -> None:
+    async with Client(
+        "http://127.0.0.1:8875/mcp", auth=os.environ["PMB_MCP_BEARER_TOKEN"]
+    ) as client:
+        await client.call_tool("record_batch", {"items": [{
+            "type": "fact",
+            "content": "The user prefers quiet reminders in the evening.",
+            "importance": 0.8,
+            "metadata": {
+                "kind": "preference",
+                "entity": "user",
+                "attribute": "reminder_style",
+                "source": "voice",
+                "chat_id": "example-session",
+                "confidence": 0.95,
+            },
+        }]})
+
+
+asyncio.run(remember())
+```
 
 ## Why the bearer token is required
 

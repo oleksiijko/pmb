@@ -91,10 +91,11 @@ def _has(args: list[str], name: str) -> bool:
 
 
 def _workspace_hint() -> str | None:
-    # Cheap, Engine-free workspace signal so the daemon can refuse to serve a
-    # different workspace's memory (S4). PMB_WORKSPACE is the reliable case;
-    # otherwise None and the daemon best-effort serves its own.
-    return os.environ.get("PMB_WORKSPACE") or None
+    # Engine-free workspace signal so the daemon can refuse to serve a
+    # different workspace's memory (S4). Resolved from cwd when PMB_WORKSPACE
+    # is unset; otherwise a daemon started in project A answers project B.
+    from pmb.core.workspace import workspace_hint
+    return workspace_hint()
 
 
 # ── daemon transport ────────────────────────────────────────────────
@@ -136,6 +137,8 @@ def _daemon_request(route: str, payload: dict, timeout: float) -> dict | None:
     """One localhost POST to a live, version-matched daemon. None on ANY
     failure (so the caller falls back). Light imports only. On a version
     mismatch it retires the stale daemon (S3) before returning None."""
+    if not payload.get("workspace"):
+        return None  # unnamed → the daemon would serve its own workspace; go cold
     try:
         import pmb
         from pmb.mcp.daemon import read_daemon_token
@@ -206,7 +209,10 @@ def _exec_full_cli(cli_args: list[str], detached: bool = False,
         if r.stdout:
             out = _inject_trace_total(r.stdout, trace_source) if trace_source else r.stdout
             sys.stdout.write(out)
-        return r.returncode
+        # Never propagate the child's exit code: Claude Code treats exit 2 from
+        # a UserPromptSubmit/PreToolUse hook as "block", and stderr is captured
+        # above, so a CLI failure would block the turn with no explanation.
+        return 0
     except Exception:
         return 0
 
@@ -231,9 +237,12 @@ def cmd_prepare_context(args: list[str]) -> int:
         return 0
     # daemon absent → the full cold path (which also autostarts a daemon). Pass
     # the message as a positional arg since stdin is already consumed here.
-    cli = ["prepare-context", msg, "--max-chars", str(max_chars)]
+    # `--` ends option parsing: a prompt starting with "-" (a Markdown bullet)
+    # would otherwise be parsed as an unknown option and fail with exit 2.
+    cli = ["prepare-context", "--max-chars", str(max_chars)]
     if quiet:
         cli.append("--quiet")
+    cli += ["--", msg]
     return _exec_full_cli(cli, trace_source="cold")
 
 

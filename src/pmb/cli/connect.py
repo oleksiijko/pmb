@@ -1038,7 +1038,10 @@ def connect(
         entry = make_remote_entry(remote, bearer_token=bearer_token)
         name = name_override or "pmb-remote"
     elif daemon_http:
-        entry = make_daemon_entry()
+        from pmb.mcp.registry import find_live_daemon
+
+        live = find_live_daemon(str(pmb_home) if pmb_home else None)
+        entry = make_daemon_entry(port=int(live["port"])) if live else make_daemon_entry()
         name = name_override or ("pmb-shared" if workspace_id else "pmb")
     elif daemon_proxy:
         entry = make_proxy_entry(cwd, workspace_id=workspace_id, pmb_home=pmb_home)

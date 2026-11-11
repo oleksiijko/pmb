@@ -451,6 +451,12 @@ def _looks_conversational(
     return True
 
 
+_PASTED_RE = re.compile(
+    r"<pasted_content(?:\s[^<>]*)?>.*?(?:</pasted_content\s*>|\Z)",
+    re.DOTALL | re.IGNORECASE,
+)
+
+
 def run_auto_context(
     engine,
     message: str,
@@ -492,14 +498,17 @@ def run_auto_context(
         res.latency_ms = int((time.perf_counter() - t0) * 1000)
         return res
 
-    # Non-message noise: task-notification / system-reminder / raw tool-output
-    # blocks get routed through the hook the same as user text, but they are
-    # NOT requests. Surfacing memory on them is pure noise - on the real
-    # workspace this was ~half of all lesson surfaces. Skip before classifying.
+    # Non-message noise: task-notification / system-reminder / subagent
+    # hand-back / raw tool-output blocks get routed through the hook the same
+    # as user text, but they are NOT requests. Surfacing memory on them is pure
+    # noise - on the real workspace this was ~half of all lesson surfaces.
+    # Skip before classifying.
     _head = msg.lstrip()[:120].lower()
-    if any(mk in _head for mk in (
+    if _head.startswith((
         "<task-notification>", "<system-reminder>", "[system notification",
         "<tool-use-id>", "<command-name>", "<local-command",
+        "<agent-message", "[subagent hand-back]",
+        "here is a note offered by a side agent",
     )):
         res.intents = [Intent.SKIP]
         res.skipped = True
@@ -522,10 +531,13 @@ def run_auto_context(
     # which is exactly the moment the rule needs to be captured (the RR
     # failure: the locate-me lesson was written only after the 7th complaint).
     correction_sig = None
-    if correction_capture:
+    # Only the user's own words can be a correction: text the user pasted
+    # (Claude Code wraps it in <pasted_content>) was written by someone else.
+    own = _PASTED_RE.sub(" ", msg).strip() if correction_capture else ""
+    if own:
         try:
             from pmb.hooks.correction_capture import detect_correction
-            correction_sig = detect_correction(msg)
+            correction_sig = detect_correction(own)
         except Exception:
             correction_sig = None
     if correction_sig:
@@ -542,8 +554,10 @@ def run_auto_context(
             except Exception:
                 corr_project = None
             try:
+                # Quote the user's words, not a paste: the draft keeps only
+                # the first 280 characters.
                 cap = engine.capture_correction(
-                    msg, severity=correction_sig.severity,
+                    own, severity=correction_sig.severity,
                     markers=correction_sig.markers,
                     importance=correction_importance,
                     project=corr_project,
