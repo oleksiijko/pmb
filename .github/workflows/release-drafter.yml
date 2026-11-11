@@ -30,6 +30,11 @@ jobs:
       contents: write          # needed to write draft release
       pull-requests: write     # needed for autolabeler
     steps:
+      - uses: release-drafter/release-drafter/autolabeler@v7
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - uses: release-drafter/release-drafter@v7
         with:
           config-name: release-drafter.yml
