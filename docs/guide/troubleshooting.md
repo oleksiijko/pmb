@@ -106,3 +106,9 @@ pmb model            # download, re-embed memory, and restart the daemon
 
 For a fully offline LLM backend, see the dedicated [Ollama](SETUP_OLLAMA.md)
 page, which covers status checks, model presets, and remote hosts.
+## The daemon changed port
+
+`pmb daemon restart` reuses the running daemon's address by default. If the
+port is occupied, PMB prints the new port. Re-run `pmb connect <agent> --daemon`
+with the original scope while the daemon is running, or update the port in
+the client's MCP URL. Restart the agent to load the updated configuration.

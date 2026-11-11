@@ -39,6 +39,9 @@ def _free_port(host: str, port: int, tries: int = 20) -> int:
     for p in range(port, port + tries):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             try:
+                if os.name != "nt":
+                    # Match uvicorn's bind policy when restarting after an HTTP connection.
+                    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                 s.bind((host, p))
                 return p
             except OSError:
@@ -73,13 +76,16 @@ def start(
         return
 
     # Auto-pick a free port so a busy 8765 (e.g. a streamable-http MCP server
-    # already on it) doesn't make the daemon die silently on bind. Hooks locate
-    # the daemon via the registry, so the exact port doesn't matter.
+    # already on it) doesn't make the daemon die silently on bind.
     requested = port
     port = _free_port(host, port)
     if port != requested:
-        console.print(f"[dim]port {requested} is busy - starting on {port} "
-                      f"instead.[/]")
+        console.print(
+            f"[yellow]Port {requested} is busy. Starting on {port}.[/] "
+            "HTTP MCP clients configured for the old port need to reconnect. "
+            "After the daemon starts, run `pmb connect <agent> --daemon` "
+            "with the original scope, or update the port in the client's MCP URL."
+        )
 
     kwargs: dict = {}
     if os.name == "nt":
@@ -212,10 +218,17 @@ def status(
 
 @daemon_app.command()
 def restart(
-    port: int = typer.Option(8765, "--port"),
-    host: str = typer.Option("127.0.0.1", "--host"),
+    port: int | None = typer.Option(None, "--port"),
+    host: str | None = typer.Option(None, "--host"),
 ):
-    """Stop the daemon (if any) and start a fresh one."""
+    """Restart on the current address unless a new one is supplied."""
+    from pmb.mcp.registry import find_live_daemon
+
+    live = find_live_daemon() or {}
+    if port is None:
+        port = int(live.get("port") or 8765)
+    if host is None:
+        host = live.get("host") or "127.0.0.1"
     stop()
     time.sleep(0.5)
     start(port=port, host=host)

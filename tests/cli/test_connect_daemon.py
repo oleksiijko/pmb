@@ -58,6 +58,16 @@ def test_connect_claude_daemon_writes_http_entry(isolated):
     assert "Authorization" in r["entry"]["headers"]
 
 
+def test_reconnect_uses_live_daemon_port(isolated, monkeypatch):
+    from pmb.cli.connect import connect as do_connect
+
+    monkeypatch.setattr("pmb.mcp.registry.find_live_daemon",
+                        lambda _home: {"port": 18765})
+    result = do_connect("claude-code", cwd=isolated, scope="project",
+                        install_hooks=False, use_daemon=True)
+    assert result["entry"]["url"] == "http://127.0.0.1:18765/mcp"
+
+
 def test_connect_claude_stdio_default_unchanged(isolated):
     from pmb.cli.connect import connect as do_connect
     r = do_connect("claude-code", cwd=isolated, scope="project",
