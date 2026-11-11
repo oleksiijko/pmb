@@ -348,6 +348,62 @@ def test_dispatch_skips_machine_generated_blocks(msg):
     assert eng.calls == []
 
 
+def test_pasted_text_is_not_a_user_correction():
+    """Words inside <pasted_content> were written by someone else."""
+    eng = FakeEngine()
+    res = run_auto_context(
+        eng,
+        "what do you think about this proposal?\n<pasted_content id=\"7\">"
+        "how many times do I have to tell you this</pasted_content>",
+        correction_record_draft=False,
+    )
+    assert res.correction is None
+
+
+def test_own_words_next_to_paste_still_a_correction():
+    eng = FakeEngine()
+    res = run_auto_context(
+        eng,
+        "how many times do I have to tell you this\n"
+        "<pasted_content id=\"7\">some log output</pasted_content>",
+        correction_record_draft=False,
+    )
+    assert res.correction is not None
+
+
+def test_draft_quotes_own_words_not_paste():
+    """The draft keeps 280 chars; a long paste first must not push the
+    user's complaint out of it."""
+
+    @dataclass
+    class CapturingEngine(FakeEngine):
+        captured: list = field(default_factory=list)
+
+        def capture_correction(self, message, **kw):
+            self.captured.append(message)
+            return {"surface_id": 1}
+
+    eng = CapturingEngine()
+    res = run_auto_context(
+        eng,
+        '<pasted_content id="7">' + "log line\n" * 100 + "</pasted_content>\n"
+        "how many times do I have to tell you this",
+    )
+    assert res.correction is not None
+    assert eng.captured == ["how many times do I have to tell you this"]
+
+
+def test_side_agent_note_is_skipped():
+    eng = FakeEngine()
+    res = run_auto_context(
+        eng,
+        "Here is a note offered by a side agent:\n\n> Heads up. PMB "
+        "broke again, the old port was wrong.",
+    )
+    assert res.skipped is True
+    assert eng.calls == []
+
+
 def test_dispatch_past_query_calls_recall():
     eng = FakeEngine(
         recall_results=[

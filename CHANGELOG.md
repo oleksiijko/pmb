@@ -18,6 +18,11 @@ All notable changes to PMB are documented here.
   for the client's next message. A waiting client sends only its cancellation
   (after 180 s in Copilot CLI). The server now reads from a private duplicate
   and points fd 0 at the null device.
+- Correction capture only reads the user's own words: text inside
+  `<pasted_content>` (a pasted log, a reply from another assistant) and
+  Claude Code side-agent notes no longer produce a false "CORRECTION
+  DETECTED" or a draft lesson. A draft made from a real correction quotes the
+  user's own words, not the paste.
 - Ollama maintenance respects the model and endpoint saved in configuration.
   Explicit arguments and environment variables still override saved values;
   auto detection probes the same endpoint used for generation. HTTP model
