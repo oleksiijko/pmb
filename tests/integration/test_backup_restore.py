@@ -2,9 +2,8 @@
 
 Two reliability guarantees a memory tool must keep:
 
-  1. A plain file-copy of `$PMB_HOME` is a valid backup: reopening an Engine on
-     the copy returns every event and recall still works (no hidden state
-     outside the workspace dir).
+  1. A plain file-copy of `$PMB_HOME` after writers stop is a valid backup:
+     reopening an Engine on the copy returns every event and its lessons.
   2. Schema migrations are forward-safe and self-healing: an older DB missing a
      newer index (e.g. S7's idx_meta_kind) gets it back automatically on the
      next Engine open — opening an old backup with a new build never errors and
@@ -12,31 +11,39 @@ Two reliability guarantees a memory tool must keep:
 """
 from __future__ import annotations
 
+import json
 import shutil
 import sqlite3
+import subprocess
+import sys
+import textwrap
 
 from pmb.core.engine import Engine
 
 
-def _checkpoint(ws) -> None:
-    con = sqlite3.connect(str(ws.db_path), timeout=2.0)
-    try:
-        con.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-    finally:
-        con.close()
-
-
 def test_file_copy_backup_round_trips(tmp_pmb_home, tmp_workspace_dir, tmp_path):
-    eng = Engine(cwd=tmp_workspace_dir, pmb_home=tmp_pmb_home,
-                 config_overrides={"recall.cache_size": 0})
-    ulids = [
-        eng.record_fact("we use PostgreSQL in production", metadata={"kind": "fact"}),
-        eng.record_fact("always run ruff before pushing", metadata={"kind": "lesson"}),
-        eng.record_fact("Я живу в Киеве", metadata={"kind": "fact"}),
-    ]
-    _checkpoint(eng.workspace)
+    writer = textwrap.dedent("""
+        import json
+        import sys
+        from pathlib import Path
 
-    # back up the WHOLE pmb_home with a plain recursive copy
+        from pmb.core.engine import Engine
+
+        with Engine(cwd=Path.cwd(), pmb_home=Path(sys.argv[1])) as engine:
+            print(json.dumps([
+                engine.record_fact("we use PostgreSQL in production", metadata={"kind": "fact"}),
+                engine.record_fact("always run ruff before pushing", metadata={"kind": "lesson"}),
+                engine.record_fact("Я живу в Киеве", metadata={"kind": "fact"}),
+            ]))
+    """)
+    result = subprocess.run(
+        [sys.executable, "-c", writer, str(tmp_pmb_home)],
+        cwd=tmp_workspace_dir, capture_output=True, text=True, encoding="utf-8", timeout=60,
+    )
+    assert result.returncode == 0, result.stderr
+    ulids = json.loads(result.stdout)
+
+    # The process exit stops SQLite and index writes before the plain copy.
     backup_home = tmp_path / "backup_home"
     shutil.copytree(tmp_pmb_home, backup_home)
 
