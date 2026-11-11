@@ -36,6 +36,9 @@ All notable changes to PMB are documented here.
   local development use the same pinned dependency constraints. Quarantine
   failures remain visible, and skipped required jobs cannot turn CI green.
 - Package, npm, MCP registry, and citation versions agree on 1.3.0.
+- Claude Code subagent hand-backs (`<agent-message ...>` prompts) are skipped
+  like `<task-notification>` blocks, so they no longer get auto-context or
+  trigger a false "CORRECTION DETECTED" and a draft lesson (issue #84).
 
 ### Previously merged fixes included in this release
 

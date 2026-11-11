@@ -326,6 +326,28 @@ def test_dispatch_skip_on_trivial():
     assert eng.calls == []
 
 
+@pytest.mark.parametrize("msg", [
+    # Markers that were already skipped: these must keep passing.
+    "<task-notification>\n<task-id>x</task-id>\n<status>completed</status>\n</task-notification>",
+    "<system-reminder>\nThe task tools haven't been used recently.\n</system-reminder>",
+    # Claude Code subagent hand-backs reach the hook as a user prompt (issue #84).
+    '<agent-message from="a1b2c3">\n[Subagent hand-back] The text below is the final report of '
+    "a subagent.\n  Done: updated settings.json hooks and verified the JSON parses.\n"
+    "</agent-message>",
+    '<AGENT-MESSAGE from="a1b2c3">\nThis was fixed again, it was wrong before.\n</AGENT-MESSAGE>',
+    "[Subagent hand-back] The text below is the final report of a subagent.\nFixed it again.",
+])
+def test_dispatch_skips_machine_generated_blocks(msg):
+    """Task notifications, system reminders and subagent hand-backs are not user requests."""
+    eng = FakeEngine()
+    res = run_auto_context(eng, msg)
+    assert res.skipped is True
+    assert res.skip_reason == "non-message (system/tool block)"
+    assert res.intents == [Intent.SKIP]
+    # No auto-context, no correction capture: the engine must not be queried at all.
+    assert eng.calls == []
+
+
 def test_dispatch_past_query_calls_recall():
     eng = FakeEngine(
         recall_results=[
