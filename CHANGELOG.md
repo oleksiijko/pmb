@@ -11,6 +11,13 @@ All notable changes to PMB are documented here.
   removes stale files, and rolls back file moves on an I/O failure.
 
 ### Fixed
+- Cold prepare-context hooks accept prompts beginning with a dash and keep
+  the agent turn open if the fallback CLI fails (#92).
+- Hook requests name their workspace before asking a shared daemon for context.
+- Daemon restarts reuse the current address, and reconnecting an HTTP MCP
+  client uses the running daemon's port (#89).
+- Arc clustering ranks active threads by similarity before selecting the
+  options sent to the model (#83).
 - On Windows, an MCP tool call no longer hangs until the client times out when
   it is the first to load a native extension or start `git` in the server
   process. The stdio transport kept a synchronous read pending on stdin, and

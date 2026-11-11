@@ -175,6 +175,10 @@ PMB is designed for several local clients touching one workspace at once.
 | Local stdio fallback | stdio | One per-client server process. Useful for compatibility, but it can pay more cold-start cost. |
 | Team or multi-machine | streamable HTTP | `pmb mcp serve --transport streamable-http --host 0.0.0.0 --bearer-token <secret>` exposes one shared server to remote agents. |
 
+Hook requests include the workspace resolved from the current directory. A
+daemon serving a different workspace declines the request so the hook can use
+the local CLI. Shared HTTP MCP tools still use the daemon's workspace.
+
 The team mode is the only mode that should listen beyond localhost. Use a bearer
 token, and put it behind a private network such as Tailscale or an SSH tunnel.
 
@@ -195,6 +199,9 @@ token, and put it behind a private network such as Tailscale or an SSH tunnel.
 
 ## Snapshot and maintenance APIs
 
+- `Engine.cluster_events_into_arcs()` ranks active arcs by embedding similarity
+  when there are more candidates than the model can choose from. The public
+  arc listing still sorts by most recent update.
 - `core.snapshots.create_snapshot(workspace, note)` publishes a verified local
   snapshot after SQLite backup and file hashing finish.
 - `core.snapshots.verify_snapshot(path, workspace_id)` checks the manifest,
