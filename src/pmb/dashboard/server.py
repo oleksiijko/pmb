@@ -22,9 +22,12 @@ Binds to 127.0.0.1 only (no remote access by default).
 
 from __future__ import annotations
 
+import errno
 import json
 import logging
 import mimetypes
+import socket
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -32,6 +35,12 @@ from urllib.parse import parse_qs, urlparse
 log = logging.getLogger(__name__)
 
 STATIC_DIR = Path(__file__).parent / "static"
+_PORT_UNAVAILABLE = {
+    errno.EADDRINUSE,
+    errno.EACCES,
+    getattr(errno, "WSAEADDRINUSE", errno.EADDRINUSE),
+    getattr(errno, "WSAEACCES", errno.EACCES),
+}
 
 
 def make_handler(engine):
@@ -772,16 +781,42 @@ def make_handler(engine):
     return _Handler
 
 
-def run_dashboard(engine, host: str = "127.0.0.1", port: int = 8765) -> None:
-    """Blocking - runs until KeyboardInterrupt."""
+class _DashboardServer(ThreadingHTTPServer):
+    # Winsock SO_REUSEADDR can share an active listener. Require exclusive use
+    # so an occupied port is reported to the caller.
+    allow_reuse_address = not hasattr(socket, "SO_EXCLUSIVEADDRUSE")
+
+    def server_bind(self) -> None:
+        if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
+
+
+def run_dashboard(
+    engine, host: str = "127.0.0.1", port: int = 8765, *,
+    fallback_port: bool = False, open_browser: bool = False,
+) -> None:
+    """Bind a listener and serve until interrupted."""
     handler = make_handler(engine)
-    server = ThreadingHTTPServer((host, port), handler)
-    print(f"PMB dashboard at http://{host}:{port}")
-    print(f"Workspace: {engine.workspace.name} ({engine.workspace.id})")
-    print("Press Ctrl+C to stop.")
     try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        print("\nShutting down.")
-    finally:
-        server.server_close()
+        server = _DashboardServer((host, port), handler)
+    except OSError as exc:
+        if not fallback_port or exc.errno not in _PORT_UNAVAILABLE:
+            raise
+        server = _DashboardServer((host, 0), handler)
+
+    with server:
+        if port and server.server_port != port:
+            print(f"Port {port} is unavailable - using port {server.server_port} instead.")
+        url = f"http://{host}:{server.server_port}"
+        print(f"PMB dashboard at {url}", flush=True)
+        print(f"Workspace: {engine.workspace.name} ({engine.workspace.id})")
+        print("Press Ctrl+C to stop.")
+        if open_browser:
+            import webbrowser
+
+            threading.Thread(target=webbrowser.open, args=(url,), daemon=True).start()
+        try:
+            server.serve_forever()
+        except KeyboardInterrupt:
+            print("\nShutting down.")

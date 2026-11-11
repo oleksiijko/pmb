@@ -11,6 +11,8 @@ All notable changes to PMB are documented here.
   removes stale files, and rolls back file moves on an I/O failure.
 
 ### Fixed
+- The dashboard retries an unavailable default port with an OS-assigned port.
+  The startup message and `--open` use the address of the bound server.
 - Cold prepare-context hooks accept prompts beginning with a dash and keep
   the agent turn open if the fallback CLI fails (#92).
 - Hook requests name their workspace before asking a shared daemon for context.

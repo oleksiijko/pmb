@@ -4,7 +4,6 @@ cli/main.py imports this module so these @app.command registrations run."""
 
 from __future__ import annotations
 
-import socket
 import time
 from pathlib import Path
 
@@ -29,29 +28,6 @@ from pmb.core.workspace import detect_workspace
 _DASHBOARD_DEFAULT_PORT = 8765
 
 
-def _can_bind_tcp(host: str, port: int) -> bool:
-    """True when a local TCP server can bind host:port right now."""
-    try:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.bind((host, port))
-        return True
-    except OSError:
-        return False
-
-
-def _dashboard_port_or_next(host: str, preferred: int, tries: int = 50) -> int:
-    """Return preferred if bindable, otherwise the next bindable port.
-
-    The dashboard and warm daemon historically both defaulted to 8765. When the
-    user did not explicitly choose a port, prefer a helpful fallback over a
-    Python traceback.
-    """
-    for p in range(preferred, preferred + tries):
-        if _can_bind_tcp(host, p):
-            return p
-    return preferred
-
-
 def _print_dashboard_bind_error(host: str, port: int, exc: OSError) -> None:
     console.print(
         f"[red]Dashboard could not bind[/] [cyan]http://{host}:{port}[/]\n"
@@ -67,7 +43,7 @@ def _print_dashboard_bind_error(host: str, port: int, exc: OSError) -> None:
 def dashboard(
     port: int | None = typer.Option(
         None, "--port", "-p",
-        help="Port to bind to (default 8765; auto-skips if the default is busy).",
+        help="Port to bind to (default 8765; picks a free port if the default is busy).",
     ),
     host: str = typer.Option("127.0.0.1", "--host", help="Bind address (default localhost)"),
     export: str = typer.Option(
@@ -108,21 +84,11 @@ def dashboard(
         console.print(f"[red]Failed to import dashboard:[/] {e}")
         return
     bind_port = port if port is not None else _DASHBOARD_DEFAULT_PORT
-    if port is None:
-        picked = _dashboard_port_or_next(host, bind_port)
-        if picked != bind_port:
-            console.print(
-                f"[yellow]Port {bind_port} is unavailable[/] - opening the "
-                f"dashboard on [cyan]{picked}[/] instead.\n"
-                f"[dim]If you want a fixed port, pass --port explicitly.[/]"
-            )
-            bind_port = picked
-    if open_browser:
-        import threading
-        import webbrowser
-        threading.Timer(1.2, lambda: webbrowser.open(f"http://{host}:{bind_port}")).start()
     try:
-        run_dashboard(eng, host=host, port=bind_port)
+        run_dashboard(
+            eng, host=host, port=bind_port, fallback_port=port is None,
+            open_browser=open_browser,
+        )
     except OSError as e:
         _print_dashboard_bind_error(host, bind_port, e)
         raise typer.Exit(2)
