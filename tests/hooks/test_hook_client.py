@@ -117,6 +117,75 @@ def test_workspace_matches_guard():
     assert _workspace_matches(eng, "otherproj") is False
 
 
+def _capture_daemon_bodies(monkeypatch):
+    """Stub a live daemon at the urlopen level; return the list of JSON bodies
+    clients POST to it."""
+    import urllib.request
+
+    import pmb
+
+    sent = []
+
+    class _Resp:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return json.dumps({"context": "X", "version": pmb.__version__}).encode()
+
+    def _fake_urlopen(req, timeout=None):
+        sent.append(json.loads(req.data.decode("utf-8")))
+        return _Resp()
+
+    monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+    monkeypatch.setattr("pmb.mcp.registry.find_live_daemon",
+                        lambda: {"host": "127.0.0.1", "port": 1}, raising=False)
+    monkeypatch.setattr("pmb.mcp.daemon.read_daemon_token", lambda: "tok",
+                        raising=False)
+    return sent
+
+
+def test_hook_requests_name_cwd_workspace_without_env(tmp_path, monkeypatch):
+    # S4: with PMB_WORKSPACE unset, both daemon paths (thin hook client and the
+    # cold CLI's daemon retry) must still name the cwd's workspace, so a daemon
+    # built in another project refuses instead of injecting its memory.
+    monkeypatch.delenv("PMB_WORKSPACE", raising=False)
+    monkeypatch.setenv("PMB_HOME", str(tmp_path / "home"))
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    monkeypatch.chdir(proj)
+    from pmb.core.workspace import detect_workspace
+    expected = detect_workspace().id
+
+    sent = _capture_daemon_bodies(monkeypatch)
+    import pmb.hookclient.__main__ as hc
+    from pmb.cli.commands.ambient import _try_daemon_prepare
+
+    assert hc._daemon_request("/internal/hook/session-restore",
+                              {"workspace": hc._workspace_hint()}, 1.0)
+    assert _try_daemon_prepare("hello", 4000) == "X"
+    assert [b.get("workspace") for b in sent] == [expected, expected]
+
+
+def test_unresolved_workspace_skips_daemon(monkeypatch):
+    # An unnamed request would be served whatever workspace the daemon holds,
+    # so when the hint can't be resolved both paths must go cold instead.
+    sent = _capture_daemon_bodies(monkeypatch)
+    monkeypatch.setattr("pmb.core.workspace.workspace_hint", lambda: None)
+    import pmb.hookclient.__main__ as hc
+    from pmb.cli.commands.ambient import _try_daemon_prepare
+
+    assert hc._daemon_request("/internal/hook/session-restore",
+                              {"workspace": hc._workspace_hint()}, 1.0) is None
+    assert _try_daemon_prepare("hello", 4000) is None
+    assert sent == []
+
+
 # ── S10: honest trace injection ─────────────────────────────────────
 
 def test_inject_trace_total_stamps_total_and_source():
