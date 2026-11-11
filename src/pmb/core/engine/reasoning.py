@@ -522,13 +522,16 @@ class ReasoningMixin:
         """LLM clusters recent unassigned events into narrative arcs.
 
         For each candidate event:
-          - Show LLM the existing active arcs + this event
+          - Show the LLM the closest active arcs + this event
           - LLM decides: join arc, create new arc, or ignore
           - Persist accordingly
 
         After clustering, optionally rewrite arc summaries to reflect new
         members (one LLM call per touched arc).
         """
+        import numpy as np
+
+        from pmb.core.search import cosine_similarity
         from pmb.reasoning.arcs import (
             Arc,
             ArcManager,
@@ -549,7 +552,7 @@ class ReasoningMixin:
             from pmb.health.consolidate import resolve_llm_client
 
             try:
-                llm = resolve_llm_client(backend=backend)
+                llm = resolve_llm_client(backend=backend, config=self.config)
             except Exception:
                 return {
                     "n_candidates": len(candidates),
@@ -560,19 +563,32 @@ class ReasoningMixin:
                 }
         mgr = ArcManager(llm)
 
+        arc_vectors: dict[str, np.ndarray] = {}
         touched_arcs: set[int] = set()
         n_joined = n_created = n_ignored = 0
         for ev in candidates:
-            arcs_now = list_arcs(self.workspace.db_path, self.workspace.id, status="active")
+            # SQLite LIMIT -1 includes older active arcs in the shortlist.
+            arcs_now = list_arcs(self.workspace.db_path, self.workspace.id, limit=-1)
+            if len(arcs_now) > mgr.max_arc_options:
+                descriptions = [f"{arc.title}\n{arc.summary}" for arc in arcs_now]
+                missing = list(dict.fromkeys(text for text in descriptions if text not in arc_vectors))
+                if missing:
+                    arc_vectors.update(zip(missing, self.search.embed_batch(missing), strict=True))
+                scores = cosine_similarity(
+                    self.search.embed(ev.content or ""),
+                    np.stack([arc_vectors[text] for text in descriptions]),
+                )
+                order = np.argsort(-scores, kind="stable")[:mgr.max_arc_options]
+                arcs_now = [arcs_now[index] for index in order]
             decision = mgr.assign_event(ev, arcs_now, self.workspace.id)
             action = decision.get("action")
             if action == "join":
                 arc_id = decision.get("arc_id")
-                # Make sure the arc actually exists in our workspace
-                if get_arc(self.workspace.db_path, arc_id):
-                    if add_event_to_arc(self.workspace.db_path, arc_id, ev.ulid):
-                        touched_arcs.add(arc_id)
-                        n_joined += 1
+                arc = get_arc(self.workspace.db_path, arc_id)
+                if (arc and arc.workspace_id == self.workspace.id and arc.status == "active"
+                        and add_event_to_arc(self.workspace.db_path, arc_id, ev.ulid)):
+                    touched_arcs.add(arc_id)
+                    n_joined += 1
                 else:
                     n_ignored += 1
             elif action == "create":
