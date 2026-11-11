@@ -143,6 +143,44 @@ def test_inject_trace_total_noop_without_trace():
 
 # ── cold-path stdout decode is pinned to UTF-8 (Cyrillic mojibake guard) ──
 
+def test_cold_cli_never_propagates_child_exit_code(monkeypatch):
+    """Regression: the cold path returned the child CLI's exit code. Claude Code
+    reads exit 2 from a UserPromptSubmit hook as "block the prompt", and stderr
+    is captured, so any CLI usage error silently blocked the user's turn."""
+    import subprocess as _sp
+
+    import pmb.hookclient.__main__ as hc
+
+    class _R:
+        returncode = 2
+        stdout = ""
+
+    monkeypatch.setattr(_sp, "run", lambda cmd, **kw: _R())
+    assert hc._exec_full_cli(["prepare-context", "--quiet"]) == 0
+
+
+def test_cold_prepare_context_accepts_prompt_starting_with_dash(monkeypatch):
+    """Regression: a prompt starting with "-" (a Markdown bullet) reached the
+    cold CLI as an unknown option → exit 2 → prompt blocked. The argv the hook
+    builds must parse with the real CLI, the prompt landing in MESSAGE."""
+    from typer.main import get_command
+
+    import pmb.hookclient.__main__ as hc
+    from pmb.cli._common import app
+
+    seen: dict = {}
+    monkeypatch.setattr(hc, "_daemon_request", lambda *a, **k: None)
+    monkeypatch.setattr(hc, "_exec_full_cli", lambda cli, **k: seen.setdefault("cli", cli) and 0)
+    monkeypatch.setattr(hc, "_read_stdin_utf8", lambda: json.dumps({"prompt": "- first bullet"}))
+    hc.cmd_prepare_context(["--quiet"])
+
+    name, *args = seen["cli"]
+    group = get_command(app)
+    cmd = group.get_command(group.make_context("pmb", [name]), name)
+    ctx = cmd.make_context(name, args)  # raises click.UsageError on a bad parse
+    assert ctx.params["message"] == "- first bullet"
+
+
 def test_cold_cli_decodes_child_stdout_as_utf8(monkeypatch):
     """Regression: the cold fallback ran `subprocess.run(..., text=True)` with no
     encoding, so the child `pmb` CLI's UTF-8 stdout was decoded with the Windows

@@ -206,7 +206,10 @@ def _exec_full_cli(cli_args: list[str], detached: bool = False,
         if r.stdout:
             out = _inject_trace_total(r.stdout, trace_source) if trace_source else r.stdout
             sys.stdout.write(out)
-        return r.returncode
+        # Never propagate the child's exit code: Claude Code treats exit 2 from
+        # a UserPromptSubmit/PreToolUse hook as "block", and stderr is captured
+        # above, so a CLI failure would block the turn with no explanation.
+        return 0
     except Exception:
         return 0
 
@@ -231,9 +234,12 @@ def cmd_prepare_context(args: list[str]) -> int:
         return 0
     # daemon absent → the full cold path (which also autostarts a daemon). Pass
     # the message as a positional arg since stdin is already consumed here.
-    cli = ["prepare-context", msg, "--max-chars", str(max_chars)]
+    # `--` ends option parsing: a prompt starting with "-" (a Markdown bullet)
+    # would otherwise be parsed as an unknown option and fail with exit 2.
+    cli = ["prepare-context", "--max-chars", str(max_chars)]
     if quiet:
         cli.append("--quiet")
+    cli += ["--", msg]
     return _exec_full_cli(cli, trace_source="cold")
 
 
